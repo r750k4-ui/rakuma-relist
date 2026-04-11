@@ -231,6 +231,57 @@
   }
 
   // ============================================================
+  // API経由で商品データを事前取得（/sell ページ上で実行）
+  // ============================================================
+
+  async function fetchItemDataViaAPI(id) {
+    const endpoints = [
+      '/api/items/' + id,
+      '/api/user_items/' + id,
+      '/api/v1/items/' + id,
+    ];
+    for (const ep of endpoints) {
+      try {
+        const res = await fetch(ep, {
+          headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' }
+        });
+        if (!res.ok) continue;
+        const json = await res.json();
+        const item = json.item || json.user_item || json.data || json;
+        if (!item || typeof item !== 'object') continue;
+        const title = item.title || item.name;
+        if (!title) continue;
+
+        // 画像URL正規化
+        const rawPhotos = item.photos || item.images || item.item_images || [];
+        const images = rawPhotos.map(p => {
+          const url = typeof p === 'string' ? p : (p.url || p.image_url || p.src || '');
+          return url.replace('/m/', '/l/').replace(/\?.*$/, '');
+        }).filter(Boolean);
+
+        return {
+          id,
+          title: String(title).substring(0, 50),
+          description: String(item.description || item.body || ''),
+          price: String(item.price || item.selling_price || ''),
+          condition: String(item.condition_id || item.condition || ''),
+          shippingPayer: String(item.shipping_payer_id || item.shipping_payer || ''),
+          shippingDays: String(item.shipping_days_id || item.shipping_days || ''),
+          shippingOrigin: String(item.shipping_origin_id || item.shipping_origin_prefecture_id || ''),
+          purchaseRequest: String(item.purchase_request || ''),
+          images,
+          categoryPath: (item.category && (item.category.path || item.category.name)) || item.category_name || '',
+          brandName: (item.brand && item.brand.name) || item.brand_name || '',
+          shippingMethod: (item.shipping_method && item.shipping_method.name) || item.shipping_method_name || '',
+        };
+      } catch (e) {
+        // 次のエンドポイントを試す
+      }
+    }
+    return null;
+  }
+
+  // ============================================================
   // 商品データ抽出（/item/{id}/edit ページ上で実行）
   // ============================================================
 
@@ -680,6 +731,24 @@
       return;
     }
 
+    // API経由で商品詳細を事前取得（編集ページ訪問を省略するため）
+    log('商品詳細データを取得中...');
+    let prefetchCount = 0;
+    for (const item of items) {
+      const data = await fetchItemDataViaAPI(item.id);
+      if (data) {
+        item._prefetchedData = data;
+        prefetchCount++;
+      }
+    }
+    if (prefetchCount === items.length) {
+      log('✓ 全商品の詳細取得完了（ワンクリック再出品が可能です）');
+    } else if (prefetchCount > 0) {
+      log(prefetchCount + '/' + items.length + '件取得済み（残りは編集ページで取得）');
+    } else {
+      log('API取得不可。各編集ページでブックマークレットを再クリックしてください');
+    }
+
     for (const item of items) {
       const li = document.createElement('li');
       li.innerHTML = `
@@ -717,26 +786,42 @@
       const selectedIds = checked.map(cb => cb.value);
       const deleteOriginals = document.getElementById('rr-delete-orig').checked;
 
-      const job = {
-        version: SCRIPT_VERSION,
-        phase: 'extract',
-        deleteOriginals,
-        items: selectedIds.map(id => ({
+      document.getElementById('rr-start-btn').disabled = true;
+      document.getElementById('rr-start-btn').textContent = '処理中...';
+
+      // 事前取得済みのデータを使用
+      const jobItems = selectedIds.map(id => {
+        const item = items.find(i => i.id === id);
+        return {
           id,
-          data: null,
+          data: item?._prefetchedData || null,
           relisted: false,
           deleted: false
-        }))
+        };
+      });
+
+      const allDataReady = jobItems.every(i => i.data);
+      const job = {
+        version: SCRIPT_VERSION,
+        phase: allDataReady ? 'relist' : 'extract',
+        deleteOriginals,
+        items: jobItems
       };
       saveJob(job);
 
-      document.getElementById('rr-start-btn').disabled = true;
-      document.getElementById('rr-start-btn').textContent = '処理中...';
-      log('ジョブ開始: ' + selectedIds.length + '件');
-
+      log('ジョブ開始: ' + selectedIds.length + '件' + (allDataReady ? '（データ取得済み）' : ''));
       await sleep(500);
-      // 1件目の編集ページへ
-      location.href = '/item/' + selectedIds[0] + '/edit';
+
+      if (allDataReady) {
+        // 編集ページ不要 → 直接新規出品へ
+        location.href = '/item/new';
+      } else {
+        // データ未取得の最初のアイテムの編集ページへ
+        const firstNoData = jobItems.find(i => !i.data);
+        log('⚠ 編集ページに移動します。ページ読み込み後に再度ブックマークレットをクリックしてください');
+        await sleep(1500);
+        location.href = '/item/' + firstNoData.id + '/edit';
+      }
     };
 
     log('商品リスト読み込み完了: ' + items.length + '件');
