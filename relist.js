@@ -159,29 +159,74 @@
   // ============================================================
 
   async function fetchSellItems() {
-    // 全ページ分取得（最大10ページ）
+    // React SPAのため、fetch()ではなく現在のDOM + Rakuma APIから取得する
     const items = [];
-    for (let page = 1; page <= 10; page++) {
-      const res = await fetch('/sell?page=' + page);
-      const html = await res.text();
-      const doc = new DOMParser().parseFromString(html, 'text/html');
-      const links = [...doc.querySelectorAll('a[href*="/item/"][href*="/edit"]')];
-      if (links.length === 0) break;
-      for (const a of links) {
+
+    // 方法1: 現在のDOMから直接取得（/sell ページ上で実行した場合）
+    // 「編集」リンク（/item/{id}/edit）を探す
+    const editLinks = [...document.querySelectorAll('a[href*="/item/"][href*="/edit"]')];
+    if (editLinks.length > 0) {
+      for (const a of editLinks) {
         const m = a.href.match(/\/item\/([a-f0-9]+)\/edit/);
         if (!m) continue;
         const id = m[1];
         if (items.find(i => i.id === id)) continue;
-        const row = a.closest('li, .deal-item, tr') || a.parentElement;
-        const titleEl = row?.querySelector('[class*="title"], h3, h4, strong') || a;
+        const row = a.closest('li, [class*="item"], [class*="deal"], tr') || a.parentElement?.parentElement || a.parentElement;
+        const titleEl = row?.querySelector('[class*="title"], [class*="name"], h3, h4, strong, p') || a;
         const imgEl = row?.querySelector('img');
         items.push({
           id,
-          title: titleEl.textContent.trim().substring(0, 50),
+          title: titleEl.textContent.trim().replace(/\s+/g, ' ').substring(0, 50),
+          thumb: imgEl?.src || ''
+        });
+      }
+      return items;
+    }
+
+    // 方法2: Rakuma内部APIから取得
+    try {
+      for (let page = 1; page <= 10; page++) {
+        const res = await fetch('/api/user_items?status=selling&page=' + page, {
+          headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' }
+        });
+        if (!res.ok) break;
+        const json = await res.json();
+        const list = json.items || json.user_items || json.data || [];
+        if (list.length === 0) break;
+        for (const item of list) {
+          const id = item.id || item.item_id;
+          if (!id) continue;
+          items.push({
+            id: String(id),
+            title: (item.title || item.name || '').substring(0, 50),
+            thumb: item.thumbnail_url || item.image_url || ''
+          });
+        }
+        if (!json.has_next && !json.next_page) break;
+      }
+    } catch (e) {
+      console.log('[rakuma-relist] API取得失敗:', e.message);
+    }
+
+    // 方法3: DOMから削除ボタンのURLでIDを取得（方法1,2が失敗した場合）
+    if (items.length === 0) {
+      // data-item-id属性やdeletリンクからIDを取得
+      const deleteLinks = [...document.querySelectorAll('a[href*="/item/"][href*="delete"], button[data-item-id], [data-id]')];
+      for (const el of deleteLinks) {
+        const id = el.dataset.itemId || el.dataset.id ||
+          (el.href || '').match(/\/item\/([a-f0-9]+)/)?.[1];
+        if (!id || items.find(i => i.id === id)) continue;
+        const row = el.closest('li, [class*="item"], [class*="deal"], tr') || el.parentElement?.parentElement;
+        const titleEl = row?.querySelector('[class*="title"], [class*="name"], h3, h4, strong, p');
+        const imgEl = row?.querySelector('img');
+        items.push({
+          id: String(id),
+          title: (titleEl?.textContent || '').trim().replace(/\s+/g, ' ').substring(0, 50) || '商品' + id,
           thumb: imgEl?.src || ''
         });
       }
     }
+
     return items;
   }
 
@@ -193,10 +238,14 @@
     const selects = document.querySelectorAll('select');
     const buttons = [...document.querySelectorAll('button')];
 
+    // カテゴリボタン（モーダルを開くボタン）テキストを取得
+    // カテゴリは ">" を含む場合が多い
     const categoryBtn = buttons.find(b =>
       b.textContent.includes('>') || b.closest('[class*="category"]')
     );
+    // ブランドボタン
     const brandBtn = buttons.find(b => b.closest('[class*="brand"]'));
+    // 配送方法ボタン
     const shippingMethodBtn = buttons.find(b =>
       b.closest('[class*="shipping-method"], [class*="shippingMethod"]') ||
       b.textContent.includes('宅配') || b.textContent.includes('ラクマパック') ||
@@ -205,7 +254,7 @@
 
     const images = [...document.querySelectorAll('img[src*="fril.jp/img"]')]
       .map(img => img.src.replace('/m/', '/l/').replace(/\?.*$/, ''))
-      .filter((url, i, arr) => arr.indexOf(url) === i);
+      .filter((url, i, arr) => arr.indexOf(url) === i); // 重複除去
 
     return {
       id,
@@ -232,6 +281,7 @@
     log('フォーム入力開始: ' + itemData.title.substring(0, 20));
     await sleep(1000);
 
+    // テキストフィールド
     const titleInput = document.querySelector('[placeholder="40文字まで"]');
     if (titleInput) setInput(titleInput, itemData.title);
     await sleep(200);
@@ -244,6 +294,7 @@
     if (textarea) setTextarea(textarea, itemData.description);
     await sleep(200);
 
+    // セレクト類
     const selects = document.querySelectorAll('select');
     if (selects[0] && itemData.condition) setSelect(selects[0], itemData.condition);
     if (selects[1] && itemData.shippingPayer) setSelect(selects[1], itemData.shippingPayer);
@@ -252,6 +303,7 @@
     if (selects[4] && itemData.purchaseRequest) setSelect(selects[4], itemData.purchaseRequest);
     await sleep(300);
 
+    // 画像アップロード
     if (itemData.images && itemData.images.length > 0) {
       log('画像アップロード中: ' + itemData.images.length + '枚');
       const fileInputs = document.querySelectorAll('input[type="file"]');
@@ -262,16 +314,19 @@
       log('画像アップロード完了');
     }
 
+    // カテゴリ選択
     if (itemData.categoryPath) {
       await selectCategory(itemData.categoryPath);
     }
     await sleep(500);
 
+    // 配送方法選択
     if (itemData.shippingMethod) {
       await selectShippingMethod(itemData.shippingMethod);
     }
     await sleep(500);
 
+    // ブランド選択（指定なし以外の場合）
     if (itemData.brandName && itemData.brandName !== '指定なし' && itemData.brandName !== 'ブランド') {
       await selectBrand(itemData.brandName);
     }
@@ -279,6 +334,7 @@
 
     log('フォーム入力完了。確認画面へ...');
 
+    // 「確認する」ボタンをクリック
     const confirmBtn = [...document.querySelectorAll('button')].find(b => b.textContent.trim() === '確認する');
     if (confirmBtn) {
       confirmBtn.scrollIntoView();
@@ -287,6 +343,7 @@
       await sleep(2000);
     }
 
+    // 「出品する」ボタンをクリック
     const submitBtn = [...document.querySelectorAll('button')].find(b =>
       b.textContent.trim() === '出品する' || b.textContent.trim() === '変更する' || b.textContent.trim() === '更新する'
     );
@@ -299,11 +356,13 @@
     }
   }
 
+  // カテゴリモーダル選択
   async function selectCategory(categoryPath) {
     log('カテゴリ選択: ' + categoryPath);
-    const labels = categoryPath.split(/>|　|／/).map(s => s.trim()).filter(Boolean);
+    const labels = categoryPath.split(/>　|/).map(s => s.trim()).filter(Boolean);
     if (labels.length === 0) return;
 
+    // カテゴリボタンを要してクリック
     const buttons = [...document.querySelectorAll('button')];
     const catBtn = buttons.find(b =>
       b.textContent.includes('>') || b.closest('[class*="category"]')
@@ -315,7 +374,7 @@
 
     try {
       const modal = await waitFor('.chakra-dialog__content', 5000);
-      for (const label of labels) {
+      for (const label of  labels) {
         await sleep(400);
         const btn = [...modal.querySelectorAll('button')].find(b => {
           const text = [...b.childNodes]
@@ -331,6 +390,7 @@
     }
   }
 
+  // 配送方法モーダル選択
   async function selectShippingMethod(methodName) {
     log('配送方法選択: ' + methodName);
     const buttons = [...document.querySelectorAll('button')];
@@ -362,6 +422,7 @@
     }
   }
 
+  // ブランドモーダル選択
   async function selectBrand(brandName) {
     log('ブランド選択: ' + brandName);
     const buttons = [...document.querySelectorAll('button')];
@@ -423,9 +484,11 @@
 
     const path = location.pathname;
 
+    // --- /item/{id}/edit : データ抽出フェーズ ---
     const editMatch = path.match(/^\/item\/([a-f0-9]+)\/edit$/);
     if (editMatch) {
       const id = editMatch[1];
+      // このIDが処理対象か確認
       const pending = job.items.find(i => i.id === id && !i.data);
       if (!pending) return false;
 
@@ -433,7 +496,7 @@
       showProgressPanel(job);
       log('データ取得中: ' + id.substring(0, 8) + '...');
 
-      await sleep(2000);
+      await sleep(2000); // ページ読み込み待機
 
       const data = extractCurrentItemData(id);
       pending.data = data;
@@ -442,10 +505,12 @@
       log('データ取得完了: ' + data.title.substring(0, 20));
       await sleep(500);
 
+      // 次のアクションへ
       advanceJob(job);
       return true;
     }
 
+    // --- /item/new : 新規出品フェーズ ---
     if (path === '/item/new') {
       const currentItem = job.items.find(i => i.data && !i.relisted);
       if (!currentItem) return false;
@@ -463,6 +528,7 @@
       return true;
     }
 
+    // --- /sell : 削除フェーズ ---
     if (path === '/sell' && job.phase === 'delete') {
       injectStyles();
       showProgressPanel(job);
@@ -472,9 +538,11 @@
         await deleteItem(toDelete.id);
         toDelete.deleted = true;
         saveJob(job);
+        // deleteはページ遷移するので次回実行に委ねる
         return true;
       }
 
+      // 全件完了
       clearJob();
       log('✅ すべての処理が完了しました！');
       showCompleteMessage();
@@ -489,17 +557,21 @@
     const allRelisted = job.items.every(i => i.relisted);
 
     if (!allDataCollected) {
+      // 次の未取得アイテムの編集ページへ
       const next = job.items.find(i => !i.data);
       saveJob(job);
       location.href = '/item/' + next.id + '/edit';
     } else if (!allRelisted) {
+      // 次の未出品アイテムの出品ページへ
       saveJob(job);
       location.href = '/item/new';
     } else if (job.deleteOriginals) {
+      // 削除フェーズへ
       job.phase = 'delete';
       saveJob(job);
       location.href = '/sell';
     } else {
+      // 全完了
       clearJob();
       log('✅ 再出品が完了しました！');
       showCompleteMessage();
@@ -529,6 +601,7 @@
       document.getElementById('rr-close').onclick = () => panel.remove();
     }
 
+    // 進捗更新
     const done = job.items.filter(i => i.relisted).length;
     const total = job.items.length;
     const pct = Math.round((done / total) * 100);
@@ -559,6 +632,7 @@
   async function showMainUI() {
     injectStyles();
 
+    // 既存パネル削除
     document.getElementById('rr-panel')?.remove();
 
     const panel = document.createElement('div');
@@ -571,7 +645,7 @@
       <div id="rr-body">
         <div style="color:#666;font-size:12px;margin-bottom:8px">
           再出品する商品を選択してください
-          <span class="rr-select-all" id="rr-select-all"（すべて選択）</span>
+          <span class="rr-select-all" id="rr-select-all">（すべて選択）</span>
         </div>
         <div style="text-align:center;padding:16px;color:#999" id="rr-loading">読み込み中...</div>
         <ul id="rr-item-list"></ul>
@@ -589,6 +663,7 @@
 
     document.getElementById('rr-close').onclick = () => panel.remove();
 
+    // 商品リスト取得
     log('出品中の商品を取得中...');
     let items = [];
     try {
@@ -615,6 +690,7 @@
       list.appendChild(li);
     }
 
+    // チェックボックス変化で開始ボタン更新
     list.addEventListener('change', updateStartBtn);
 
     function updateStartBtn() {
@@ -629,11 +705,13 @@
       }
     }
 
+    // すべて選択
     document.getElementById('rr-select-all').onclick = () => {
       list.querySelectorAll('input[type="checkbox"]').forEach(cb => cb.checked = true);
       updateStartBtn();
     };
 
+    // 再出品開始
     document.getElementById('rr-start-btn').onclick = async () => {
       const checked = [...list.querySelectorAll('input[type="checkbox"]:checked')];
       const selectedIds = checked.map(cb => cb.value);
@@ -657,6 +735,7 @@
       log('ジョブ開始: ' + selectedIds.length + '件');
 
       await sleep(500);
+      // 1件目の編集ページへ
       location.href = '/item/' + selectedIds[0] + '/edit';
     };
 
@@ -668,24 +747,26 @@
   // ============================================================
 
   (async function main() {
+    // 進行中のジョブがあれば継続
     const job = getJob();
     if (job) {
       const handled = await runJob();
       if (handled) return;
+      // 対象外ページならジョブをキャンセルするか確認
       if (confirm('再出品処理が中断されています。\nキャンセルして最初からやり直しますか？')) {
         clearJob();
       }
     }
 
+    // /sell ページならメインUIを表示
     if (location.pathname === '/sell' || location.pathname === '/sell/') {
       await showMainUI();
       return;
     }
 
+    // その他のページ
     alert('ラクマの「出品した商品」ページ（https://fril.jp/sell）で起動してください。\n\n現在ページに移動します。');
     location.href = '/sell';
   })();
 
 })();
-
- 
