@@ -167,7 +167,7 @@
     const editLinks = [...document.querySelectorAll('a[href*="/item/"][href*="/edit"]')];
     if (editLinks.length > 0) {
       for (const a of editLinks) {
-        const m = a.href.match(/\/item\/([a-f0-9]+)\/edit/);
+        const m = a.href.match(/\/item\/([a-zA-Z0-9_-]+)\/edit/);
         if (!m) continue;
         const id = m[1];
         if (items.find(i => i.id === id)) continue;
@@ -214,7 +214,7 @@
       const deleteLinks = [...document.querySelectorAll('a[href*="/item/"][href*="delete"], button[data-item-id], [data-id]')];
       for (const el of deleteLinks) {
         const id = el.dataset.itemId || el.dataset.id ||
-          (el.href || '').match(/\/item\/([a-f0-9]+)/)?.[1];
+          (el.href || '').match(/\/item\/([a-zA-Z0-9_-]+)/)?.[1];
         if (!id || items.find(i => i.id === id)) continue;
         const row = el.closest('li, [class*="item"], [class*="deal"], tr') || el.parentElement?.parentElement;
         const titleEl = row?.querySelector('[class*="title"], [class*="name"], h3, h4, strong, p');
@@ -231,52 +231,142 @@
   }
 
   // ============================================================
-  // API経由で商品データを事前取得（/sell ページ上で実行）
+  // API経由で兆品データを事前取得（/sell ページ上で実行）
   // ============================================================
 
+  // itemオブジェクトから共通フォーマットに変換
+  function normalizeItemData(id, item) {
+    const title = item.title || item.name;
+    if (!title) return null;
+    const rawPhotos = item.photos || item.images || item.item_images || [];
+    const images = rawPhotos.map(p => {
+      const url = typeof p === 'string' ? p : (p.url || p.image_url || p.src || '');
+      return url.replace('/m/', '/l/').replace(/\?.*$/, '');
+    }).filter(Boolean);
+    return {
+      id,
+      title: String(title).substring(0, 50),
+      description: String(item.description || item.body || ''),
+      price: String(item.price || item.selling_price || ''),
+      condition: String(item.condition_id || item.condition || ''),
+      shippingPayer: String(item.shipping_payer_id || item.shipping_payer || ''),
+      shippingDays: String(item.shipping_days_id || item.shipping_days || ''),
+      shippingOrigin: String(item.shipping_origin_id || item.shipping_origin_prefecture_id || ''),
+      purchaseRequest: String(item.purchase_request || ''),
+      images,
+      categoryPath: (item.category && (item.category.path || item.category.name)) || item.category_name || '',
+      brandName: (item.brand && item.brand.name) || item.brand_name || '',
+      shippingMethod: (item.shipping_method && item.shipping_method.name) || item.shipping_method_name || '',
+    };
+  }
+
   async function fetchItemDataViaAPI(id) {
+    // 方法1: JSONのAPIエンドポイントを試す
     const endpoints = [
       '/api/items/' + id,
       '/api/user_items/' + id,
       '/api/v1/items/' + id,
+      '/api/v2/items/' + id,
+      '/items/' + id + '.json',
     ];
     for (const ep of endpoints) {
       try {
         const res = await fetch(ep, {
-          headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' }
+          headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+          credentials: 'include'
         });
         if (!res.ok) continue;
+        const ct = res.headers.get('content-type') || '';
+        if (!ct.includes('json')) continue;
         const json = await res.json();
         const item = json.item || json.user_item || json.data || json;
         if (!item || typeof item !== 'object') continue;
-        const title = item.title || item.name;
-        if (!title) continue;
+        const result = normalizeItemData(id, item);
+        if (result) return result;
+      } catch (e) { /* 次のエンドポイントを試す */ }
+    }
 
-        // 画像URL正規化
-        const rawPhotos = item.photos || item.images || item.item_images || [];
-        const images = rawPhotos.map(p => {
-          const url = typeof p === 'string' ? p : (p.url || p.image_url || p.src || '');
-          return url.replace('/m/', '/l/').replace(/\?.*$/, '');
-        }).filter(Boolean);
+    // 方法2: 編集ページのHTMLを取得してJSONデータを解析
+    const pagesToTry = ['/item/' + id + '/edit', '/item/' + id];
+    for (const pageUrl of pagesToTry) {
+      try {
+        const res = await fetch(pageUrl, { credentials: 'include' });
+        if (!res.ok) continue;
+        const html = await res.text();
 
-        return {
-          id,
-          title: String(title).substring(0, 50),
-          description: String(item.description || item.body || ''),
-          price: String(item.price || item.selling_price || ''),
-          condition: String(item.condition_id || item.condition || ''),
-          shippingPayer: String(item.shipping_payer_id || item.shipping_payer || ''),
-          shippingDays: String(item.shipping_days_id || item.shipping_days || ''),
-          shippingOrigin: String(item.shipping_origin_id || item.shipping_origin_prefecture_id || ''),
-          purchaseRequest: String(item.purchase_request || ''),
-          images,
-          categoryPath: (item.category && (item.category.path || item.category.name)) || item.category_name || '',
-          brandName: (item.brand && item.brand.name) || item.brand_name || '',
-          shippingMethod: (item.shipping_method && item.shipping_method.name) || item.shipping_method_name || '',
-        };
-      } catch (e) {
-        // 次のエンドポイントを試す
+        // Next.js __NEXT_DATA__ を探す
+        const nextMatch = html.match(/<script[^>]*id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
+        if (nextMatch) {
+          try {
+            const nd = JSON.parse(nextMatch[1]);
+            const pp = nd?.props?.pageProps;
+            const item = pp?.item || pp?.itemData || pp?.editItem || pp?.sell_item;
+            if (item) {
+              const result = normalizeItemData(id, item);
+              if (result) return result;
+            }
+            // pageProps全体を再帰的に検索
+            const found = findItemInObject(pp, id);
+            if (found) return normalizeItemData(id, found);
+          } catch (e) { /* JSON parse失敗 */ }
+        }
+
+        // window.__INITIAL_STATE__ や window.__REDUX_STATE__ を探す
+        const statePatterns = [
+          /window\.__(?:INITIAL|REDUX|APP)_STATE__\s*=\s*(\{[\s\S]*?\});\s*(?:window|<\/script>)/,
+          /window\.__STATE__\s*=\s*(\{[\s\S]*?\});\s*(?:window|<\/script>)/,
+        ];
+        for (const pat of statePatterns) {
+          const m = html.match(pat);
+          if (m) {
+            try {
+              const state = JSON.parse(m[1]);
+              const found = findItemInObject(state, id);
+              if (found) return normalizeItemData(id, found);
+            } catch (e) { /* parse失敗 */ }
+          }
+        }
+
+        // application/json スクリプトタグを全探索
+        const jsonTagMatches = [...html.matchAll(/<script[^>]+type="application\/json"[^>]*>([\s\S]*?)<\/script>/g)];
+        for (const m of jsonTagMatches) {
+          try {
+            const obj = JSON.parse(m[1]);
+            const found = findItemInObject(obj, id);
+            if (found) return normalizeItemData(id, found);
+          } catch (e) { /* parse失敗 */ }
+        }
+      } catch (e) { /* ページ取得失敗 */ }
+    }
+
+    return null;
+  }
+
+  // オブジェクトを再帰的に探索してitemデータを見つける
+  function findItemInObject(obj, id, depth = 0) {
+    if (!obj || typeof obj !== 'object' || depth > 6) return null;
+    // このオブジェクト自体がitemデータか判定
+    if ((obj.title || obj.name) && (obj.price || obj.selling_price)) return obj;
+    // 配列の場合はIDで検索
+    if (Array.isArray(obj)) {
+      for (const el of obj) {
+        const r = findItemInObject(el, id, depth + 1);
+        if (r) return r;
       }
+      return null;
+    }
+    // よくある候補キーを優先
+    const priorityKeys = ['item', 'sell_item', 'user_item', 'itemDetail', 'editItem'];
+    for (const k of priorityKeys) {
+      if (obj[k]) {
+        const r = findItemInObject(obj[k], id, depth + 1);
+        if (r) return r;
+      }
+    }
+    for (const k of Object.keys(obj)) {
+      if (priorityKeys.includes(k)) continue;
+      const r = findItemInObject(obj[k], id, depth + 1);
+      if (r) return r;
     }
     return null;
   }
@@ -536,7 +626,7 @@
     const path = location.pathname;
 
     // --- /item/{id}/edit : データ抽出フェーズ ---
-    const editMatch = path.match(/^\/item\/([a-f0-9]+)\/edit$/);
+    const editMatch = path.match(/^\/item\/([a-zA-Z0-9_-]+)\/edit$/);
     if (editMatch) {
       const id = editMatch[1];
       // このIDが処理対象か確認
@@ -746,7 +836,7 @@
     } else if (prefetchCount > 0) {
       log(prefetchCount + '/' + items.length + '件取得済み（残りは編集ページで取得）');
     } else {
-      log('API取得不可。各編集ページでブックマークレットを再クリックしてください');
+      log('⚠ データ自動取得不可。商品選択後に「再出品する」を押すと各編集ページへ移動します。各ページ表示後にブックマークレットを再クリックしてください');
     }
 
     for (const item of items) {
@@ -838,7 +928,7 @@
       const handled = await runJob();
       if (handled) return;
       // 対象外ページならジョブをキャンセルするか確認
-      if (confirm('再出品処理が中断されています。\nキャンセルして最初からやり直しますか？')) {
+      if (confirm('再出哅処理が中断されています。\nキャンセルして最初からやり直しますか？')) {
         clearJob();
       }
     }
