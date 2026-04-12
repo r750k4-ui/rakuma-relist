@@ -231,7 +231,7 @@
   }
 
   // ============================================================
-  // API経由で兆品データを事前取得（/sell ページ上で実行）
+  // API経由で商品データを事前取得（/sell ページ上で実行）
   // ============================================================
 
   // itemオブジェクトから共通フォーマットに変換
@@ -261,13 +261,12 @@
   }
 
   async function fetchItemDataViaAPI(id) {
-    // 方法1: JSONのAPIエンドポイントを試す
+    // 方法1: JSONのAPIエンドポイントを試す（高速）
     const endpoints = [
       '/api/items/' + id,
       '/api/user_items/' + id,
       '/api/v1/items/' + id,
       '/api/v2/items/' + id,
-      '/items/' + id + '.json',
     ];
     for (const ep of endpoints) {
       try {
@@ -283,92 +282,102 @@
         if (!item || typeof item !== 'object') continue;
         const result = normalizeItemData(id, item);
         if (result) return result;
-      } catch (e) { /* 次のエンドポイントを試す */ }
+      } catch (e) { /* 次を試す */ }
     }
 
-    // 方法2: 編集ページのHTMLを取得してJSONデータを解析
-    const pagesToTry = ['/item/' + id + '/edit', '/item/' + id];
-    for (const pageUrl of pagesToTry) {
-      try {
-        const res = await fetch(pageUrl, { credentials: 'include' });
-        if (!res.ok) continue;
-        const html = await res.text();
-
-        // Next.js __NEXT_DATA__ を探す
-        const nextMatch = html.match(/<script[^>]*id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
-        if (nextMatch) {
-          try {
-            const nd = JSON.parse(nextMatch[1]);
-            const pp = nd?.props?.pageProps;
-            const item = pp?.item || pp?.itemData || pp?.editItem || pp?.sell_item;
-            if (item) {
-              const result = normalizeItemData(id, item);
-              if (result) return result;
-            }
-            // pageProps全体を再帰的に検索
-            const found = findItemInObject(pp, id);
-            if (found) return normalizeItemData(id, found);
-          } catch (e) { /* JSON parse失敗 */ }
-        }
-
-        // window.__INITIAL_STATE__ や window.__REDUX_STATE__ を探す
-        const statePatterns = [
-          /window\.__(?:INITIAL|REDUX|APP)_STATE__\s*=\s*(\{[\s\S]*?\});\s*(?:window|<\/script>)/,
-          /window\.__STATE__\s*=\s*(\{[\s\S]*?\});\s*(?:window|<\/script>)/,
-        ];
-        for (const pat of statePatterns) {
-          const m = html.match(pat);
-          if (m) {
-            try {
-              const state = JSON.parse(m[1]);
-              const found = findItemInObject(state, id);
-              if (found) return normalizeItemData(id, found);
-            } catch (e) { /* parse失敗 */ }
-          }
-        }
-
-        // application/json スクリプトタグを全探索
-        const jsonTagMatches = [...html.matchAll(/<script[^>]+type="application\/json"[^>]*>([\s\S]*?)<\/script>/g)];
-        for (const m of jsonTagMatches) {
-          try {
-            const obj = JSON.parse(m[1]);
-            const found = findItemInObject(obj, id);
-            if (found) return normalizeItemData(id, found);
-          } catch (e) { /* parse失敗 */ }
-        }
-      } catch (e) { /* ページ取得失敗 */ }
-    }
-
-    return null;
+    // 方法2: 編集ページをiframeで読み込んでReactのDOMからデータ取得
+    return await fetchItemDataViaIframe(id);
   }
 
-  // オブジェクトを再帰的に探索してitemデータを見つける
-  function findItemInObject(obj, id, depth = 0) {
-    if (!obj || typeof obj !== 'object' || depth > 6) return null;
-    // このオブジェクト自体がitemデータか判定
-    if ((obj.title || obj.name) && (obj.price || obj.selling_price)) return obj;
-    // 配列の場合はIDで検索
-    if (Array.isArray(obj)) {
-      for (const el of obj) {
-        const r = findItemInObject(el, id, depth + 1);
-        if (r) return r;
-      }
-      return null;
-    }
-    // よくある候補キーを優先
-    const priorityKeys = ['item', 'sell_item', 'user_item', 'itemDetail', 'editItem'];
-    for (const k of priorityKeys) {
-      if (obj[k]) {
-        const r = findItemInObject(obj[k], id, depth + 1);
-        if (r) return r;
-      }
-    }
-    for (const k of Object.keys(obj)) {
-      if (priorityKeys.includes(k)) continue;
-      const r = findItemInObject(obj[k], id, depth + 1);
-      if (r) return r;
-    }
-    return null;
+  // 隠しiframeで編集ページを読み込み、React描画後にデータ抽出
+  async function fetchItemDataViaIframe(id) {
+    return new Promise((resolve) => {
+      const iframe = document.createElement('iframe');
+      iframe.src = '/item/' + id + '/edit';
+      // 画面外に配置（サイズを持たせないとReactが描画しないことがある）
+      iframe.style.cssText = 'position:fixed;width:390px;height:844px;top:0;left:-9999px;opacity:0;pointer-events:none;z-index:-1;';
+      document.body.appendChild(iframe);
+
+      let attempts = 0;
+      const MAX = 30; // 最大15秒
+
+      const timer = setInterval(() => {
+        attempts++;
+        if (attempts > MAX) {
+          clearInterval(timer);
+          try { iframe.remove(); } catch (e) {}
+          resolve(null);
+          return;
+        }
+        try {
+          const doc = iframe.contentDocument || iframe.contentWindow?.document;
+          if (!doc || doc.readyState !== 'complete') return;
+
+          // タイトル入力欄を探す（Reactがレンダリングして値が入るまで待つ）
+          const titleInput =
+            doc.querySelector('input[placeholder*="40文字"]') ||
+            doc.querySelector('input[placeholder*="40字"]') ||
+            doc.querySelector('input[maxlength="40"]') ||
+            [...doc.querySelectorAll('input[type="text"]')].find(el =>
+              (el.placeholder || '').includes('文字') || el.maxLength === 40
+            );
+
+          // 値が入っていなければまだロード中
+          if (!titleInput?.value) return;
+
+          clearInterval(timer);
+
+          const selects = doc.querySelectorAll('select');
+          const buttons = [...doc.querySelectorAll('button')];
+          const categoryBtn = buttons.find(b =>
+            b.textContent.includes('>') || b.closest('[class*="category"]')
+          );
+          const brandBtn = buttons.find(b => b.closest('[class*="brand"]'));
+          const shippingMethodBtn = buttons.find(b =>
+            b.closest('[class*="shipping-method"], [class*="shippingMethod"]') ||
+            b.textContent.includes('宅配') || b.textContent.includes('ラクマパック') ||
+            b.textContent.includes('飛脚') || b.textContent.includes('ゆうパック')
+          );
+          const textarea = doc.querySelector('textarea');
+          const priceInput =
+            doc.querySelector('[placeholder*="300"]') ||
+            doc.querySelector('[placeholder*="金額"]') ||
+            doc.querySelector('[placeholder*="円"]');
+
+          const images = [...doc.querySelectorAll('img')]
+            .filter(img => img.src && (img.src.includes('fril.jp/img') || img.src.includes('item-image')))
+            .map(img => img.src.replace('/m/', '/l/').replace(/\?.*$/, ''))
+            .filter((url, i, arr) => url && arr.indexOf(url) === i);
+
+          try { iframe.remove(); } catch (e) {}
+
+          const data = {
+            id,
+            title: titleInput.value.substring(0, 50),
+            description: textarea?.value || '',
+            price: priceInput?.value || '',
+            condition: selects[0]?.value || '',
+            shippingPayer: selects[1]?.value || '',
+            shippingDays: selects[2]?.value || '',
+            shippingOrigin: selects[3]?.value || '',
+            purchaseRequest: selects[4]?.value || '',
+            images,
+            categoryPath: categoryBtn?.textContent.trim() || '',
+            brandName: brandBtn?.textContent.trim() || '',
+            shippingMethod: shippingMethodBtn?.textContent.trim() || '',
+          };
+          resolve(data.title ? data : null);
+
+        } catch (e) {
+          // クロスオリジンエラー等 - silently continue
+          if (attempts >= MAX) {
+            clearInterval(timer);
+            try { iframe.remove(); } catch (e2) {}
+            resolve(null);
+          }
+        }
+      }, 500);
+    });
   }
 
   // ============================================================
@@ -928,7 +937,7 @@
       const handled = await runJob();
       if (handled) return;
       // 対象外ページならジョブをキャンセルするか確認
-      if (confirm('再出哅処理が中断されています。\nキャンセルして最初からやり直しますか？')) {
+      if (confirm('再出品処理が中断されています。\nキャンセルして最初からやり直しますか？')) {
         clearJob();
       }
     }
