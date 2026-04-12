@@ -162,27 +162,6 @@
     // React SPAのため、fetch()ではなく現在のDOM + Rakuma APIから取得する
     const items = [];
 
-    // 方法1: 現在のDOMから直接取得（/sell ページ上で実行した場合）
-    // 「編集」リンク（/item/{id}/edit）を探す
-    const editLinks = [...document.querySelectorAll('a[href*="/item/"][href*="/edit"]')];
-    if (editLinks.length > 0) {
-      for (const a of editLinks) {
-        const m = a.href.match(/\/item\/([a-zA-Z0-9_-]+)\/edit/);
-        if (!m) continue;
-        const id = m[1];
-        if (items.find(i => i.id === id)) continue;
-        const row = a.closest('li, [class*="item"], [class*="deal"], tr') || a.parentElement?.parentElement || a.parentElement;
-        const titleEl = row?.querySelector('[class*="title"], [class*="name"], h3, h4, strong, p') || a;
-        const imgEl = row?.querySelector('img');
-        items.push({
-          id,
-          title: titleEl.textContent.trim().replace(/\s+/g, ' ').substring(0, 50),
-          thumb: imgEl?.src || ''
-        });
-      }
-      return items;
-    }
-
     // 方法2: Rakuma内部APIから取得
     try {
       for (let page = 1; page <= 10; page++) {
@@ -285,18 +264,24 @@
       } catch (e) { /* 次を試す */ }
     }
 
-    // 方法2: 編集ページをiframeで読み込んでReactのDOMからデータ取得
-    return await fetchItemDataViaIframe(id);
+    // 方法2: ポップアップウィンドウで編集ページを開いてReactのDOMからデータ取得
+    return await fetchItemDataViaPopup(id);
   }
 
-  // 隠しiframeで編集ページを読み込み、React描画後にデータ抽出
-  async function fetchItemDataViaIframe(id) {
+  // ポップアップウィンドウで編集ページを読み込み、React描画後にデータ抽出
+  // （iframeはX-Frame-Optionsでブロックされるため、popupを使用）
+  async function fetchItemDataViaPopup(id, existingPopup) {
     return new Promise((resolve) => {
-      const iframe = document.createElement('iframe');
-      iframe.src = '/item/' + id + '/edit';
-      // 画面外に配置（サイズを持たせないとReactが描画しないことがある）
-      iframe.style.cssText = 'position:fixed;width:390px;height:844px;top:0;left:-9999px;opacity:0;pointer-events:none;z-index:-1;';
-      document.body.appendChild(iframe);
+      const popup = existingPopup || window.open(
+        '/item/' + id + '/edit',
+        'rr_popup_' + id,
+        'width=390,height=844,left=0,top=0,toolbar=no,menubar=no,scrollbars=no,resizable=no'
+      );
+
+      if (!popup) {
+        resolve(null);
+        return;
+      }
 
       let attempts = 0;
       const MAX = 30; // 最大15秒
@@ -305,12 +290,12 @@
         attempts++;
         if (attempts > MAX) {
           clearInterval(timer);
-          try { iframe.remove(); } catch (e) {}
+          try { popup.close(); } catch (e) {}
           resolve(null);
           return;
         }
         try {
-          const doc = iframe.contentDocument || iframe.contentWindow?.document;
+          const doc = popup.document;
           if (!doc || doc.readyState !== 'complete') return;
 
           // タイトル入力欄を探す（Reactがレンダリングして値が入るまで待つ）
@@ -349,7 +334,7 @@
             .map(img => img.src.replace('/m/', '/l/').replace(/\?.*$/, ''))
             .filter((url, i, arr) => url && arr.indexOf(url) === i);
 
-          try { iframe.remove(); } catch (e) {}
+          try { popup.close(); } catch (e) {}
 
           const data = {
             id,
@@ -369,10 +354,9 @@
           resolve(data.title ? data : null);
 
         } catch (e) {
-          // クロスオリジンエラー等 - silently continue
           if (attempts >= MAX) {
             clearInterval(timer);
-            try { iframe.remove(); } catch (e2) {}
+            try { popup.close(); } catch (e2) {}
             resolve(null);
           }
         }
@@ -838,14 +822,31 @@
 
       const btn = document.getElementById('rr-start-btn');
       btn.disabled = true;
+      btn.textContent = 'ポップアップを開いています...';
 
-      // 選択した商品のデータをiframeで順次取得（このページを離れずに）
+      // ユーザー操作コンテキスト内で全ポップアップを一括オープン
+      const popups = {};
+      for (const id of selectedIds) {
+        popups[id] = window.open(
+          '/item/' + id + '/edit',
+          'rr_popup_' + id,
+          'width=390,height=844,left=0,top=0,toolbar=no,menubar=no,scrollbars=no'
+        );
+        if (!popups[id]) {
+          log('❌ ポップアップがブロックされました。ブラウザのポップアップ許可設定でfril.jpを許可してください。');
+          btn.textContent = selectedIds.length + '件を再出品する';
+          btn.disabled = false;
+          return;
+        }
+      }
+
+      // ポップアップからデータを順次取得
       const jobItems = [];
       for (let i = 0; i < selectedIds.length; i++) {
         const id = selectedIds[i];
         btn.textContent = 'データ取得中 ' + (i + 1) + '/' + selectedIds.length + '件...';
         log('データ取得中 (' + (i + 1) + '/' + selectedIds.length + '): ' + id.substring(0, 8) + '...');
-        const data = await fetchItemDataViaIframe(id);
+        const data = await fetchItemDataViaPopup(id, popups[id]);
         jobItems.push({ id, data, relisted: false, deleted: false });
         if (data) {
           log('✓ 取得: ' + data.title.substring(0, 20));
