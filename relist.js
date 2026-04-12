@@ -634,32 +634,6 @@
 
     const path = location.pathname;
 
-    // --- /item/{id}/edit : データ抽出フェーズ ---
-    const editMatch = path.match(/^\/item\/([a-zA-Z0-9_-]+)\/edit$/);
-    if (editMatch) {
-      const id = editMatch[1];
-      // このIDが処理対象か確認
-      const pending = job.items.find(i => i.id === id && !i.data);
-      if (!pending) return false;
-
-      injectStyles();
-      showProgressPanel(job);
-      log('データ取得中: ' + id.substring(0, 8) + '...');
-
-      await sleep(2000); // ページ読み込み待機
-
-      const data = extractCurrentItemData(id);
-      pending.data = data;
-      saveJob(job);
-
-      log('データ取得完了: ' + data.title.substring(0, 20));
-      await sleep(500);
-
-      // 次のアクションへ
-      advanceJob(job);
-      return true;
-    }
-
     // --- /item/new : 新規出品フェーズ ---
     if (path === '/item/new') {
       const currentItem = job.items.find(i => i.data && !i.relisted);
@@ -703,15 +677,9 @@
   }
 
   function advanceJob(job) {
-    const allDataCollected = job.items.every(i => i.data);
     const allRelisted = job.items.every(i => i.relisted);
 
-    if (!allDataCollected) {
-      // 次の未取得アイテムの編集ページへ
-      const next = job.items.find(i => !i.data);
-      saveJob(job);
-      location.href = '/item/' + next.id + '/edit';
-    } else if (!allRelisted) {
+    if (!allRelisted) {
       // 次の未出品アイテムの出品ページへ
       saveJob(job);
       location.href = '/item/new';
@@ -868,65 +836,46 @@
       const selectedIds = checked.map(cb => cb.value);
       const deleteOriginals = document.getElementById('rr-delete-orig').checked;
 
-      document.getElementById('rr-start-btn').disabled = true;
-      document.getElementById('rr-start-btn').textContent = '処理中...';
+      const btn = document.getElementById('rr-start-btn');
+      btn.disabled = true;
 
-      // 事前取得済みのデータを使用
-      const jobItems = selectedIds.map(id => {
-        const item = items.find(i => i.id === id);
-        return {
-          id,
-          data: item?._prefetchedData || null,
-          relisted: false,
-          deleted: false
-        };
-      });
+      // 選択した商品のデータをiframeで順次取得（このページを離れずに）
+      const jobItems = [];
+      for (let i = 0; i < selectedIds.length; i++) {
+        const id = selectedIds[i];
+        btn.textContent = 'データ取得中 ' + (i + 1) + '/' + selectedIds.length + '件...';
+        log('データ取得中 (' + (i + 1) + '/' + selectedIds.length + '): ' + id.substring(0, 8) + '...');
+        const data = await fetchItemDataViaIframe(id);
+        jobItems.push({ id, data, relisted: false, deleted: false });
+        if (data) {
+          log('✓ 取得: ' + data.title.substring(0, 20));
+        } else {
+          log('⚠ 取得失敗: ' + id.substring(0, 8) + '（スキップします）');
+        }
+      }
 
-      const allDataReady = jobItems.every(i => i.data);
+      const validItems = jobItems.filter(i => i.data);
+      if (validItems.length === 0) {
+        log('❌ データ取得できた商品がありません。再度お試しください。');
+        btn.textContent = selectedIds.length + '件を再出品する';
+        btn.disabled = false;
+        return;
+      }
+
       const job = {
         version: SCRIPT_VERSION,
-        phase: allDataReady ? 'relist' : 'extract',
+        phase: 'relist',
         deleteOriginals,
-        items: jobItems
+        items: validItems
       };
       saveJob(job);
 
-      log('ジョブ開始: ' + selectedIds.length + '件' + (allDataReady ? '（データ取得済み）' : ''));
+      log('データ取得完了: ' + validItems.length + '件。新規出品ページへ移動します...');
       await sleep(500);
-
-      if (allDataReady) {
-        // 編集ページ不要 → 直接新規出品へ
-        location.href = '/item/new';
-      } else {
-        // データ未取得の最初のアイテムの編集ページへ
-        const firstNoData = jobItems.find(i => !i.data);
-        log('⚠ 編集ページに移動します。ページ読み込み後に再度ブックマークレットをクリックしてください');
-        await sleep(1500);
-        location.href = '/item/' + firstNoData.id + '/edit';
-      }
+      location.href = '/item/new';
     };
 
     log('商品リスト読み込み完了: ' + items.length + '件');
-
-    // API経由で商品詳細をバックグラウンドで事前取得（UIをブロックしない）
-    (async () => {
-      log('商品詳細データを取得中...');
-      let prefetchCount = 0;
-      for (const item of items) {
-        const data = await fetchItemDataViaAPI(item.id);
-        if (data) {
-          item._prefetchedData = data;
-          prefetchCount++;
-        }
-      }
-      if (prefetchCount === items.length) {
-        log('✓ 全商品の詳細取得完了（ワンクリック再出品が可能です）');
-      } else if (prefetchCount > 0) {
-        log(prefetchCount + '/' + items.length + '件取得済み（残りは再出品時に取得）');
-      } else {
-        log('ℹ 詳細データ取得スキップ。再出品ボタンを押すと処理を開始します');
-      }
-    })();
   }
 
   // ============================================================
