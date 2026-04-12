@@ -830,24 +830,7 @@
       return;
     }
 
-    // API経由で商品詳細を事前取得（編集ページ訪問を省略するため）
-    log('商品詳細データを取得中...');
-    let prefetchCount = 0;
-    for (const item of items) {
-      const data = await fetchItemDataViaAPI(item.id);
-      if (data) {
-        item._prefetchedData = data;
-        prefetchCount++;
-      }
-    }
-    if (prefetchCount === items.length) {
-      log('✓ 全商品の詳細取得完了（ワンクリック再出品が可能です）');
-    } else if (prefetchCount > 0) {
-      log(prefetchCount + '/' + items.length + '件取得済み（残りは編集ページで取得）');
-    } else {
-      log('⚠ データ自動取得不可。商品選択後に「再出品する」を押すと各編集ページへ移動します。各ページ表示後にブックマークレットを再クリックしてください');
-    }
-
+    // まずアイテムリストを即時レンダリング（プリフェッチを待たない）
     for (const item of items) {
       const li = document.createElement('li');
       li.innerHTML = `
@@ -924,6 +907,26 @@
     };
 
     log('商品リスト読み込み完了: ' + items.length + '件');
+
+    // API経由で商品詳細をバックグラウンドで事前取得（UIをブロックしない）
+    (async () => {
+      log('商品詳細データを取得中...');
+      let prefetchCount = 0;
+      for (const item of items) {
+        const data = await fetchItemDataViaAPI(item.id);
+        if (data) {
+          item._prefetchedData = data;
+          prefetchCount++;
+        }
+      }
+      if (prefetchCount === items.length) {
+        log('✓ 全商品の詳細取得完了（ワンクリック再出品が可能です）');
+      } else if (prefetchCount > 0) {
+        log(prefetchCount + '/' + items.length + '件取得済み（残りは再出品時に取得）');
+      } else {
+        log('ℹ 詳細データ取得スキップ。再出品ボタンを押すと処理を開始します');
+      }
+    })();
   }
 
   // ============================================================
