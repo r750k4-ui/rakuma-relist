@@ -159,8 +159,43 @@
   // ============================================================
 
   async function fetchSellItems() {
-    // React SPAのため、fetch()ではなく現在のDOM + Rakuma APIから取得する
     const items = [];
+
+    // 方法1: /item/{id}/edit リンクからIDを取得（最も確実）
+    // 「編集」ボタンのhrefにIDが含まれている
+    const editLinks = [...document.querySelectorAll('a[href*="/item/"][href*="/edit"]')];
+    for (const a of editLinks) {
+      const m = a.href.match(/\/item\/([a-zA-Z0-9_-]+)\/edit/);
+      if (!m) continue;
+      const id = m[1];
+      if (items.find(i => i.id === id)) continue;
+
+      // 同じ商品カード内の要素を探す（「編集」テキスト自体はタイトルでないので使わない）
+      const card = a.closest('li, article, [class*="item"], [class*="deal"], tr, div[class]');
+      // 画像の alt や、テキストノードからタイトルを推測
+      const imgEl = card?.querySelector('img');
+      const altText = imgEl?.alt?.trim();
+      // imgのaltが「商品名」に近ければそれを使う
+      // それ以外はカード内のテキストノードを収集してタイトルを推定
+      let title = '';
+      if (altText && altText.length > 4 && !altText.includes('http')) {
+        title = altText;
+      } else if (card) {
+        // カード内の全テキストから「編集」「削除」「再出品」などのUI文字を除いたもの
+        const allText = [...card.querySelectorAll('*')]
+          .filter(el => el.children.length === 0) // テキストノードを持つ末端要素
+          .map(el => el.textContent.trim())
+          .filter(t => t.length > 4 && !/^(編集|削除|再出品|コメ削|コメ|購入|出品|取引|下書き|\+|\-|\d+円?)$/.test(t))
+          .join(' ')
+          .trim()
+          .substring(0, 50);
+        title = allText;
+      }
+      if (!title) title = '商品ID:' + id;
+
+      items.push({ id, title, thumb: imgEl?.src || '' });
+    }
+    if (items.length > 0) return items;
 
     // 方法2: Rakuma内部APIから取得
     try {
@@ -185,25 +220,6 @@
       }
     } catch (e) {
       console.log('[rakuma-relist] API取得失敗:', e.message);
-    }
-
-    // 方法3: DOMから削除ボタンのURLでIDを取得（方法1,2が失敗した場合）
-    if (items.length === 0) {
-      // data-item-id属性やdeletリンクからIDを取得
-      const deleteLinks = [...document.querySelectorAll('a[href*="/item/"][href*="delete"], button[data-item-id], [data-id]')];
-      for (const el of deleteLinks) {
-        const id = el.dataset.itemId || el.dataset.id ||
-          (el.href || '').match(/\/item\/([a-zA-Z0-9_-]+)/)?.[1];
-        if (!id || items.find(i => i.id === id)) continue;
-        const row = el.closest('li, [class*="item"], [class*="deal"], tr') || el.parentElement?.parentElement;
-        const titleEl = row?.querySelector('[class*="title"], [class*="name"], h3, h4, strong, p');
-        const imgEl = row?.querySelector('img');
-        items.push({
-          id: String(id),
-          title: (titleEl?.textContent || '').trim().replace(/\s+/g, ' ').substring(0, 50) || '商品' + id,
-          thumb: imgEl?.src || ''
-        });
-      }
     }
 
     return items;
