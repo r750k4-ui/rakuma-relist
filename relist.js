@@ -37,37 +37,41 @@
     });
   }
 
-  // React管理 input に値をセット
+  // React管理 input に値をセット（ポップアップ内要素にも対応）
   function setInput(el, value) {
-    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    const win = el.ownerDocument.defaultView || window;
+    const setter = Object.getOwnPropertyDescriptor(win.HTMLInputElement.prototype, 'value').set;
     setter.call(el, value);
-    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new win.Event('input', { bubbles: true }));
   }
 
-  // React管理 textarea に値をセット
+  // React管理 textarea に値をセット（ポップアップ内要素にも対応）
   function setTextarea(el, value) {
-    const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+    const win = el.ownerDocument.defaultView || window;
+    const setter = Object.getOwnPropertyDescriptor(win.HTMLTextAreaElement.prototype, 'value').set;
     setter.call(el, value);
-    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new win.Event('input', { bubbles: true }));
   }
 
-  // React管理 select に値をセット
+  // React管理 select に値をセット（ポップアップ内要素にも対応）
   function setSelect(el, value) {
-    const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
+    const win = el.ownerDocument.defaultView || window;
+    const setter = Object.getOwnPropertyDescriptor(win.HTMLSelectElement.prototype, 'value').set;
     setter.call(el, value);
-    el.dispatchEvent(new Event('change', { bubbles: true }));
+    el.dispatchEvent(new win.Event('change', { bubbles: true }));
   }
 
-  // 画像URLをfetchしてfile inputにセット
+  // 画像URLをfetchしてfile inputにセット（ポップアップ内要素にも対応）
   async function uploadImageFromUrl(fileInput, url) {
+    const win = fileInput.ownerDocument.defaultView || window;
     const filename = url.split('/').pop().split('?')[0];
     const res = await fetch(url);
     const blob = await res.blob();
-    const file = new File([blob], filename, { type: 'image/jpeg' });
-    const dt = new DataTransfer();
+    const file = new win.File([blob], filename, { type: 'image/jpeg' });
+    const dt = new win.DataTransfer();
     dt.items.add(file);
     fileInput.files = dt.files;
-    fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+    fileInput.dispatchEvent(new win.Event('change', { bubbles: true }));
   }
 
   function getJob() {
@@ -550,7 +554,8 @@
     return new Promise((resolve, reject) => {
       const el = doc.querySelector(selector);
       if (el) return resolve(el);
-      const observer = new MutationObserver(() => {
+      const win = doc.defaultView || window;
+      const observer = new win.MutationObserver(() => {
         const el = doc.querySelector(selector);
         if (el) { observer.disconnect(); resolve(el); }
       });
