@@ -306,7 +306,7 @@
         attempts++;
         if (attempts > MAX) {
           clearInterval(timer);
-          try { popup.close(); } catch (e) {}
+          // timeout: leave popup open, caller will handle
           resolve(null);
           return;
         }
@@ -350,7 +350,7 @@
             .map(img => img.src.replace('/m/', '/l/').replace(/\?.*$/, ''))
             .filter((url, i, arr) => url && arr.indexOf(url) === i);
 
-          try { popup.close(); } catch (e) {}
+          // popup stays open for reuse in fillNewItemForm
 
           const data = {
             id,
@@ -372,7 +372,7 @@
         } catch (e) {
           if (attempts >= MAX) {
             clearInterval(timer);
-            try { popup.close(); } catch (e2) {}
+            // leave popup open on error, caller handles
             resolve(null);
           }
         }
@@ -427,25 +427,44 @@
   // 新規出品フォーム入力（/item/new ページ上で実行）
   // ============================================================
 
-  async function fillNewItemForm(itemData) {
+  // doc: 操作対象のpopupウィンドウ（/item/new に遷移してからフォームを埋める）
+  async function fillNewItemForm(itemData, popup) {
     log('フォーム入力開始: ' + itemData.title.substring(0, 20));
-    await sleep(1000);
 
-    // テキストフィールド
-    const titleInput = document.querySelector('[placeholder="40文字まで"]');
-    if (titleInput) setInput(titleInput, itemData.title);
+    // /item/new に遷移後、Reactがレンダリングするまでタイトル入力欄を待つ（最大20秒）
+    const titleInput = await new Promise(resolve => {
+      let attempts = 0;
+      const check = setInterval(() => {
+        attempts++;
+        try {
+          const doc = popup.document;
+          if (!doc || doc.readyState !== 'complete') return;
+          const el = doc.querySelector('[placeholder="40文字まで"]') ||
+                     doc.querySelector('[placeholder*="商品名"]') ||
+                     doc.querySelector('[maxlength="40"]');
+          if (el) { clearInterval(check); resolve(el); }
+        } catch (e) {}
+        if (attempts > 40) { clearInterval(check); resolve(null); }
+      }, 500);
+    });
+
+    if (!titleInput) { log('❌ 出品フォームが見つかりません'); return false; }
+
+    const doc = popup.document;
+
+    setInput(titleInput, itemData.title);
     await sleep(200);
 
-    const priceInput = document.querySelector('[placeholder*="300"], [placeholder*="円"]');
+    const priceInput = doc.querySelector('[placeholder*="300"], [placeholder*="円"]');
     if (priceInput) setInput(priceInput, itemData.price);
     await sleep(200);
 
-    const textarea = document.querySelector('textarea');
+    const textarea = doc.querySelector('textarea');
     if (textarea) setTextarea(textarea, itemData.description);
     await sleep(200);
 
     // セレクト類
-    const selects = document.querySelectorAll('select');
+    const selects = doc.querySelectorAll('select');
     if (selects[0] && itemData.condition) setSelect(selects[0], itemData.condition);
     if (selects[1] && itemData.shippingPayer) setSelect(selects[1], itemData.shippingPayer);
     if (selects[2] && itemData.shippingDays) setSelect(selects[2], itemData.shippingDays);
@@ -456,7 +475,7 @@
     // 画像アップロード
     if (itemData.images && itemData.images.length > 0) {
       log('画像アップロード中: ' + itemData.images.length + '枚');
-      const fileInputs = document.querySelectorAll('input[type="file"]');
+      const fileInputs = doc.querySelectorAll('input[type="file"]');
       for (let i = 0; i < Math.min(itemData.images.length, fileInputs.length - 2); i++) {
         await uploadImageFromUrl(fileInputs[i], itemData.images[i]);
         await sleep(600);
@@ -466,65 +485,96 @@
 
     // カテゴリ選択
     if (itemData.categoryPath) {
-      await selectCategory(itemData.categoryPath);
+      await selectCategory(itemData.categoryPath, doc);
     }
     await sleep(500);
 
     // 配送方法選択
     if (itemData.shippingMethod) {
-      await selectShippingMethod(itemData.shippingMethod);
+      await selectShippingMethod(itemData.shippingMethod, doc);
     }
     await sleep(500);
 
     // ブランド選択（指定なし以外の場合）
     if (itemData.brandName && itemData.brandName !== '指定なし' && itemData.brandName !== 'ブランド') {
-      await selectBrand(itemData.brandName);
+      await selectBrand(itemData.brandName, doc);
     }
     await sleep(500);
 
     log('フォーム入力完了。確認画面へ...');
 
     // 「確認する」ボタンをクリック
-    const confirmBtn = [...document.querySelectorAll('button')].find(b => b.textContent.trim() === '確認する');
+    const confirmBtn = [...doc.querySelectorAll('button')].find(b => b.textContent.trim() === '確認する');
     if (confirmBtn) {
       confirmBtn.scrollIntoView();
       await sleep(300);
       confirmBtn.click();
-      await sleep(2000);
+    } else {
+      log('⚠ 確認ボタンが見つかりません');
+      return false;
     }
 
-    // 「出品する」ボタンをクリック
-    const submitBtn = [...document.querySelectorAll('button')].find(b =>
-      b.textContent.trim() === '出品する' || b.textContent.trim() === '変更する' || b.textContent.trim() === '更新する'
-    );
+    // 確認ページに遷移後「出品する」ボタンを待つ（最大15秒）
+    log('確認ページ待機中...');
+    const submitBtn = await new Promise(resolve => {
+      let attempts = 0;
+      const check = setInterval(() => {
+        attempts++;
+        try {
+          const newDoc = popup.document;
+          const btn = [...newDoc.querySelectorAll('button')].find(b =>
+            b.textContent.trim() === '出品する' ||
+            b.textContent.trim() === '変更する' ||
+            b.textContent.trim() === '更新する'
+          );
+          if (btn) { clearInterval(check); resolve(btn); }
+        } catch (e) {}
+        if (attempts > 30) { clearInterval(check); resolve(null); }
+      }, 500);
+    });
+
     if (submitBtn) {
       submitBtn.scrollIntoView();
       await sleep(300);
       submitBtn.click();
-      log('出品完了！');
+      log('✅ 出品完了！');
       await sleep(3000);
+      return true;
+    } else {
+      log('⚠ 出品ボタンが見つかりません');
+      return false;
     }
   }
 
+  function waitForInDoc(doc, selector, timeout) {
+    return new Promise((resolve, reject) => {
+      const el = doc.querySelector(selector);
+      if (el) return resolve(el);
+      const observer = new MutationObserver(() => {
+        const el = doc.querySelector(selector);
+        if (el) { observer.disconnect(); resolve(el); }
+      });
+      observer.observe(doc.body, { childList: true, subtree: true });
+      setTimeout(() => { observer.disconnect(); reject(new Error('timeout: ' + selector)); }, timeout || 5000);
+    });
+  }
+
   // カテゴリモーダル選択
-  async function selectCategory(categoryPath) {
+  async function selectCategory(categoryPath, doc) {
     log('カテゴリ選択: ' + categoryPath);
-    const labels = categoryPath.split(/>　|/).map(s => s.trim()).filter(Boolean);
+    const labels = categoryPath.split(/>　|>/).map(s => s.trim()).filter(Boolean);
     if (labels.length === 0) return;
 
-    // カテゴリボタンを要してクリック
-    const buttons = [...document.querySelectorAll('button')];
-    const catBtn = buttons.find(b =>
+    const catBtn = [...doc.querySelectorAll('button')].find(b =>
       b.textContent.includes('>') || b.closest('[class*="category"]')
     );
     if (!catBtn) return;
-
     catBtn.click();
     await sleep(800);
 
     try {
-      const modal = await waitFor('.chakra-dialog__content', 5000);
-      for (const label of  labels) {
+      const modal = await waitForInDoc(doc, '.chakra-dialog__content', 5000);
+      for (const label of labels) {
         await sleep(400);
         const btn = [...modal.querySelectorAll('button')].find(b => {
           const text = [...b.childNodes]
@@ -541,20 +591,18 @@
   }
 
   // 配送方法モーダル選択
-  async function selectShippingMethod(methodName) {
+  async function selectShippingMethod(methodName, doc) {
     log('配送方法選択: ' + methodName);
-    const buttons = [...document.querySelectorAll('button')];
-    const shipBtn = buttons.find(b =>
+    const shipBtn = [...doc.querySelectorAll('button')].find(b =>
       b.closest('[class*="shipping-method"], [class*="shippingMethod"]') ||
       b.textContent.includes('配送方法を選択')
     );
     if (!shipBtn) return;
-
     shipBtn.click();
     await sleep(800);
 
     try {
-      const modal = await waitFor('.chakra-dialog__content', 5000);
+      const modal = await waitForInDoc(doc, '.chakra-dialog__content', 5000);
       const target = [...modal.querySelectorAll('button, span, label')].find(el => {
         const text = [...el.childNodes]
           .filter(n => n.nodeType === 3)
@@ -573,17 +621,15 @@
   }
 
   // ブランドモーダル選択
-  async function selectBrand(brandName) {
+  async function selectBrand(brandName, doc) {
     log('ブランド選択: ' + brandName);
-    const buttons = [...document.querySelectorAll('button')];
-    const brandBtn = buttons.find(b => b.closest('[class*="brand"]'));
+    const brandBtn = [...doc.querySelectorAll('button')].find(b => b.closest('[class*="brand"]'));
     if (!brandBtn) return;
-
     brandBtn.click();
     await sleep(800);
 
     try {
-      const modal = await waitFor('.chakra-dialog__content', 5000);
+      const modal = await waitForInDoc(doc, '.chakra-dialog__content', 5000);
       const searchInput = modal.querySelector('input[type="text"], input[type="search"]');
       if (searchInput) {
         setInput(searchInput, brandName);
@@ -643,7 +689,7 @@
       showProgressPanel(job);
       log('出品中: ' + currentItem.data.title.substring(0, 20));
 
-      await fillNewItemForm(currentItem.data);
+      await fillNewItemForm(currentItem.data, window);
 
       currentItem.relisted = true;
       saveJob(job);
@@ -879,17 +925,37 @@
         return;
       }
 
-      const job = {
-        version: SCRIPT_VERSION,
-        phase: 'relist',
-        deleteOriginals,
-        items: validItems
-      };
-      saveJob(job);
+      // データ取得したポップアップを使って /item/new に遷移し、フォームを自動入力・出品
+      let successCount = 0;
+      for (let idx = 0; idx < validItems.length; idx++) {
+        const jobItem = validItems[idx];
+        const popup = popups[jobItem.id];
+        btn.textContent = '出品中 ' + (idx + 1) + '/' + validItems.length + '件...';
+        log('新規出品中 (' + (idx + 1) + '/' + validItems.length + '): ' + jobItem.data.title.substring(0, 20));
 
-      log('データ取得完了: ' + validItems.length + '件。新規出品ページへ移動します...');
-      await sleep(500);
-      location.href = '/item/new';
+        // 同じポップアップを /item/new に遷移させてフォームを埋める
+        try { popup.location.href = '/item/new'; } catch (e) {
+          log('⚠ ポップアップ遷移失敗: ' + e.message);
+          continue;
+        }
+
+        const success = await fillNewItemForm(jobItem.data, popup);
+
+        if (success && deleteOriginals) {
+          log('元の出品を削除中: ' + jobItem.id.substring(0, 8) + '...');
+          await deleteItem(jobItem.id);
+        }
+
+        try { popup.close(); } catch (e) {}
+
+        if (success) successCount++;
+      }
+
+      clearJob();
+      btn.textContent = successCount + '件 完了！';
+      log('✅ ' + successCount + '/' + validItems.length + '件の再出品が完了しました！');
+      if (successCount > 0) showCompleteMessage();
+      btn.disabled = false;
     };
 
     log('商品リスト読み込み完了: ' + items.length + '件');
