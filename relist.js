@@ -1,22 +1,22 @@
 /*!
- * ã©ã¯ãååºåãã¼ã« v2.0
+ * ラクマ再出品ツール v2.0
  * https://github.com/r750k4-ui/rakuma-relist
  *
- * fril.jpä¸ã§ããã¯ãã¼ã¯ã¬ããããèµ·åãã¦ä½¿ç¨ãã¾ãã
- * localStorageãä½¿ã£ã¦ãã¼ã¸ãã¾ããã§ç¶æãç®¡çãã¾ãã
+ * fril.jp上でブックマークレットから起動して使用します。
+ * localStorageを使ってページをまたいで状態を管理します。
  */
 (function () {
   'use strict';
 
   if (!location.hostname.includes('fril.jp')) {
-    alert('ãã®ãã¼ã«ã¯fril.jpï¼ã©ã¯ãï¼ã®ãã¼ã¸ã§èµ·åãã¦ãã ããã');
+    alert('このツールはfril.jp（ラクマ）のページで起動してください。');
     return;
   }
 
   const STORAGE_KEY = 'rakuma_relist_job';
 
   // ============================================================
-  // ã¦ã¼ãã£ãªãã£
+  // ユーティリティ
   // ============================================================
 
   function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
@@ -34,7 +34,7 @@
     });
   }
 
-  // Reactç®¡çãã©ã¼ã ã¸ã®å¤è¨­å®ï¼åä¸ã¦ã£ã³ãã¦ãªã®ã§åé¡ãªãï¼
+  // React管理フォームへの値設定（同一ウィンドウなので問題なし）
   function setInput(el, value) {
     const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
     setter.call(el, value);
@@ -53,7 +53,7 @@
     el.dispatchEvent(new Event('change', { bubbles: true }));
   }
 
-  // ç»åURLãfile inputã«ã¢ããã­ã¼ã
+  // 画像URLをfile inputにアップロード
   async function uploadImageFromUrl(fileInput, url) {
     const filename = url.split('/').pop().split('?')[0] || 'image.jpg';
     const res = await fetch(url);
@@ -67,7 +67,7 @@
   }
 
   // ============================================================
-  // ã¸ã§ãç®¡çï¼localStorageï¼
+  // ジョブ管理（localStorage）
   // ============================================================
 
   function getJob() {
@@ -78,7 +78,7 @@
   function clearJob() { localStorage.removeItem(STORAGE_KEY); }
 
   // ============================================================
-  // /sell ãã¼ã¸ï¼åºåä¸­ååãªã¹ãåå¾
+  // /sell ページ：出品中商品リスト取得
   // ============================================================
 
   async function fetchSellItems() {
@@ -107,13 +107,13 @@
         if (!json.has_next && !json.next_page) break;
       }
     } catch (e) {
-      console.log('[rakuma-relist] APIåå¾ã¨ã©ã¼:', e.message);
+      console.log('[rakuma-relist] API取得エラー:', e.message);
     }
     return items;
   }
 
   // ============================================================
-  // /item/{id}/edit ãã¼ã¸ï¼ç¾å¨ãã¼ã¸ãããã¼ã¿æ½åº
+  // /item/{id}/edit ページ：現在ページからデータ抽出
   // ============================================================
 
   function extractCurrentItemData(id) {
@@ -126,8 +126,8 @@
     const brandBtn = buttons.find(b => b.closest('[class*="brand"]'));
     const shippingMethodBtn = buttons.find(b =>
       b.closest('[class*="shipping-method"], [class*="shippingMethod"]') ||
-      b.textContent.includes('éé') || b.textContent.includes('ã¤ãã') ||
-      b.textContent.includes('å®æ¥ä¾¿') || b.textContent.includes('ãããã')
+      b.textContent.includes('配送') || b.textContent.includes('ヤマト') ||
+      b.textContent.includes('宅急便') || b.textContent.includes('ゆうゆう')
     );
 
     const images = [...document.querySelectorAll('img[src*="fril.jp/img"]')]
@@ -136,9 +136,9 @@
 
     return {
       id,
-      title: document.querySelector('[placeholder="40æå­ã¾ã§"]')?.value || '',
+      title: document.querySelector('[placeholder="40文字まで"]')?.value || '',
       description: document.querySelector('textarea')?.value || '',
-      price: document.querySelector('[placeholder*="300"], [placeholder*="å"]')?.value || '',
+      price: document.querySelector('[placeholder*="300"], [placeholder*="円"]')?.value || '',
       condition: selects[0]?.value || '',
       shippingPayer: selects[1]?.value || '',
       shippingDays: selects[2]?.value || '',
@@ -152,27 +152,27 @@
   }
 
   // ============================================================
-  // /item/new ãã¼ã¸ï¼ãã©ã¼ã èªåå¥åï¼åä¸ã¦ã£ã³ãã¦ã§å®è¡ï¼
+  // /item/new ページ：フォーム自動入力（同一ウィンドウで実行）
   // ============================================================
 
   async function fillNewItemForm(itemData) {
-    log('ãã©ã¼ã å¥åéå§: ' + itemData.title.substring(0, 20));
+    log('フォーム入力開始: ' + itemData.title.substring(0, 20));
 
-    // ã¿ã¤ãã«å¥åæ¬ãç¾ããã¾ã§å¾ã¤ï¼æå¤§20ç§ï¼
+    // タイトル入力欄が現れるまで待つ（最大20秒）
     let titleInput;
     try {
-      titleInput = await waitFor('[placeholder="40æå­ã¾ã§"], [placeholder*="ååå"], [maxlength="40"]', 20000);
+      titleInput = await waitFor('[placeholder="40文字まで"], [placeholder*="商品名"], [maxlength="40"]', 20000);
     } catch (e) {
-      log('â ã¿ã¤ãã«å¥åæ¬ãè¦ã¤ããã¾ãã');
+      log('❌ タイトル入力欄が見つかりません');
       return false;
     }
 
     try {
-      log('ã¿ã¤ãã«å¥åä¸­...');
+      log('タイトル入力中...');
       setInput(titleInput, itemData.title);
       await sleep(400);
 
-      const priceInput = document.querySelector('[placeholder*="300"], [placeholder*="å"], [placeholder*="éé¡"]');
+      const priceInput = document.querySelector('[placeholder*="300"], [placeholder*="円"], [placeholder*="金額"]');
       if (priceInput && itemData.price) setInput(priceInput, itemData.price);
       await sleep(200);
 
@@ -180,7 +180,7 @@
       if (textarea && itemData.description) setTextarea(textarea, itemData.description);
       await sleep(200);
 
-      // ã»ã¬ã¯ãé¡
+      // セレクト類
       const selects = document.querySelectorAll('select');
       if (selects[0] && itemData.condition) setSelect(selects[0], itemData.condition);
       if (selects[1] && itemData.shippingPayer) setSelect(selects[1], itemData.shippingPayer);
@@ -189,12 +189,12 @@
       if (selects[4] && itemData.purchaseRequest) setSelect(selects[4], itemData.purchaseRequest);
       await sleep(300);
 
-      // ç»åã¢ããã­ã¼ã
+      // 画像アップロード
       if (itemData.images && itemData.images.length > 0) {
         const fileInputs = document.querySelectorAll('input[type="file"]');
         const uploadCount = Math.min(itemData.images.length, Math.max(0, fileInputs.length - 2));
         if (uploadCount > 0) {
-          log('ç»åã¢ããã­ã¼ãä¸­: ' + uploadCount + 'æ');
+          log('画像アップロード中: ' + uploadCount + '枚');
           let uploaded = 0;
           for (let i = 0; i < uploadCount; i++) {
             try {
@@ -202,44 +202,44 @@
               uploaded++;
               await sleep(600);
             } catch (e) {
-              log('â  ç»å' + (i + 1) + 'æç®ã¹ã­ãã: ' + e.message);
+              log('⚠ 画像' + (i + 1) + '枚目スキップ: ' + e.message);
             }
           }
-          log('ç»å: ' + uploaded + '/' + uploadCount + 'æå®äº');
+          log('画像: ' + uploaded + '/' + uploadCount + '枚完了');
         }
       }
 
-      // ã«ãã´ãªé¸æ
+      // カテゴリ選択
       if (itemData.categoryPath) await selectCategory(itemData.categoryPath);
       await sleep(500);
 
-      // ééæ¹æ³é¸æ
+      // 配送方法選択
       if (itemData.shippingMethod) await selectShippingMethod(itemData.shippingMethod);
       await sleep(500);
 
-      // ãã©ã³ãé¸æ
-      if (itemData.brandName && itemData.brandName !== 'ãã©ã³ããªã' && itemData.brandName !== 'ãã©ã³ã') {
+      // ブランド選択
+      if (itemData.brandName && itemData.brandName !== 'ブランドなし' && itemData.brandName !== 'ブランド') {
         await selectBrand(itemData.brandName);
       }
       await sleep(500);
 
-      log('ç¢ºèªãã¿ã³ãæ¼ãã¾ã...');
-      const confirmBtn = [...document.querySelectorAll('button')].find(b => b.textContent.trim() === 'ç¢ºèªãã');
-      if (!confirmBtn) { log('â  ç¢ºèªãã¿ã³ãè¦ã¤ããã¾ãã'); return false; }
+      log('確認ボタンを押します...');
+      const confirmBtn = [...document.querySelectorAll('button')].find(b => b.textContent.trim() === '確認する');
+      if (!confirmBtn) { log('⚠ 確認ボタンが見つかりません'); return false; }
       confirmBtn.scrollIntoView();
       await sleep(300);
       confirmBtn.click();
 
-      // ãåºåããããã¿ã³ãå¾ã¤ï¼æå¤§15ç§ï¼
-      log('ç¢ºèªãã¼ã¸é·ç§»å¾ã¡...');
+      // 「出品する」ボタンを待つ（最大15秒）
+      log('確認ページ遷移待ち...');
       const submitBtn = await new Promise(resolve => {
         let n = 0;
         const t = setInterval(() => {
           n++;
           const btn = [...document.querySelectorAll('button')].find(b =>
-            b.textContent.trim() === 'åºåãã' ||
-            b.textContent.trim() === 'æ°è¦åºåãã' ||
-            b.textContent.trim() === 'åºåãæ°è¦ç»é²ãã'
+            b.textContent.trim() === '出品する' ||
+            b.textContent.trim() === '新規出品する' ||
+            b.textContent.trim() === '出品を新規登録する'
           );
           if (btn) { clearInterval(t); resolve(btn); }
           if (n > 30) { clearInterval(t); resolve(null); }
@@ -250,25 +250,25 @@
         submitBtn.scrollIntoView();
         await sleep(300);
         submitBtn.click();
-        log('â åºåå®äºï¼');
+        log('✅ 出品完了！');
         await sleep(3000);
         return true;
       } else {
-        log('â  åºåãã¿ã³ãè¦ã¤ããã¾ãã');
+        log('⚠ 出品ボタンが見つかりません');
         return false;
       }
     } catch (e) {
-      log('â ãã©ã¼ã å¥åã¨ã©ã¼: ' + e.message);
+      log('❌ フォーム入力エラー: ' + e.message);
       return false;
     }
   }
 
   // ============================================================
-  // ã¢ã¼ãã«é¸æãã«ãã¼
+  // モーダル選択ヘルパー
   // ============================================================
 
   async function selectCategory(categoryPath) {
-    log('ã«ãã´ãªé¸æ: ' + categoryPath);
+    log('カテゴリ選択: ' + categoryPath);
     const labels = categoryPath.split(/> |>/).map(s => s.trim()).filter(Boolean);
     if (!labels.length) return;
     const catBtn = [...document.querySelectorAll('button')].find(b =>
@@ -287,14 +287,14 @@
         });
         if (btn) btn.click();
       }
-    } catch (e) { log('ã«ãã´ãªã¢ã¼ãã«ã¨ã©ã¼: ' + e.message); }
+    } catch (e) { log('カテゴリモーダルエラー: ' + e.message); }
   }
 
   async function selectShippingMethod(methodName) {
-    log('ééæ¹æ³é¸æ: ' + methodName);
+    log('配送方法選択: ' + methodName);
     const shipBtn = [...document.querySelectorAll('button')].find(b =>
       b.closest('[class*="shipping-method"], [class*="shippingMethod"]') ||
-      b.textContent.includes('ééæ¹æ³ãé¸æ')
+      b.textContent.includes('配送方法を選択')
     );
     if (!shipBtn) return;
     shipBtn.click();
@@ -310,11 +310,11 @@
         const parent = target.closest('button') || target.parentElement;
         if (parent && parent !== target) parent.click();
       }
-    } catch (e) { log('ééæ¹æ³ã¢ã¼ãã«ã¨ã©ã¼: ' + e.message); }
+    } catch (e) { log('配送方法モーダルエラー: ' + e.message); }
   }
 
   async function selectBrand(brandName) {
-    log('ãã©ã³ãé¸æ: ' + brandName);
+    log('ブランド選択: ' + brandName);
     const brandBtn = [...document.querySelectorAll('button')].find(b => b.closest('[class*="brand"]'));
     if (!brandBtn) return;
     brandBtn.click();
@@ -328,17 +328,17 @@
         const result = [...modal.querySelectorAll('button, li')].find(el => el.textContent.trim() === brandName);
         if (result) result.click();
       }
-    } catch (e) { log('ãã©ã³ãã¢ã¼ãã«ã¨ã©ã¼: ' + e.message); }
+    } catch (e) { log('ブランドモーダルエラー: ' + e.message); }
   }
 
   // ============================================================
-  // åé¤å¦ç
+  // 削除処理
   // ============================================================
 
   async function deleteItem(id) {
-    log('åºååé¤ä¸­: ' + id.substring(0, 8) + '...');
+    log('出品削除中: ' + id.substring(0, 8) + '...');
     const csrf = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
-    if (!csrf) { log('CSRFãã¼ã¯ã³åå¾å¤±æ'); return false; }
+    if (!csrf) { log('CSRFトークン取得失敗'); return false; }
     const form = document.createElement('form');
     form.method = 'POST';
     form.action = '/item/' + id;
@@ -352,7 +352,7 @@
   }
 
   // ============================================================
-  // ã¡ã¤ã³ã¸ã§ããã­ã¼ï¼ãã¼ã¸ãã¾ããã§ç¶æç®¡çï¼
+  // メインジョブフロー（ページをまたいで状態管理）
   // ============================================================
 
   async function runJob() {
@@ -360,7 +360,7 @@
     if (!job) return false;
     const path = location.pathname;
 
-    // --- /item/{id}/edit: ç·¨éãã¼ã¸ã§ãã¼ã¿æ½åº ---
+    // --- /item/{id}/edit: 編集ページでデータ抽出 ---
     const editMatch = path.match(/^\/item\/([^/]+)\/edit$/);
     if (editMatch) {
       const id = editMatch[1];
@@ -369,27 +369,27 @@
 
       injectStyles();
       showProgressPanel(job);
-      log('ãã¼ã¿åå¾ä¸­: ' + id.substring(0, 8) + '...');
+      log('データ取得中: ' + id.substring(0, 8) + '...');
 
-      // Reactã®ã¬ã³ããªã³ã°ãå¾ã¤
+      // Reactのレンダリングを待つ
       try {
-        await waitFor('[placeholder="40æå­ã¾ã§"], [maxlength="40"]', 15000);
-      } catch (e) { log('â  ãã©ã¼ã èª­ã¿è¾¼ã¿ã¿ã¤ã ã¢ã¦ã'); }
+        await waitFor('[placeholder="40文字まで"], [maxlength="40"]', 15000);
+      } catch (e) { log('⚠ フォーム読み込みタイムアウト'); }
       await sleep(500);
 
       const data = extractCurrentItemData(id);
       if (data.title) {
-        log('â åå¾: ' + data.title.substring(0, 20));
+        log('✓ 取得: ' + data.title.substring(0, 20));
         jobItem.data = data;
         saveJob(job);
       } else {
-        log('â  ãã¼ã¿åå¾å¤±æï¼ã¿ã¤ãã«ãªãï¼ãã¹ã­ãããã¾ã');
+        log('⚠ データ取得失敗（タイトルなし）、スキップします');
         jobItem.data = null;
         jobItem.relisted = false;
         saveJob(job);
       }
 
-      // æ¬¡ã®ã¢ã¯ã·ã§ã³
+      // 次のアクション
       const nextEdit = job.items.find(i => i.data === null && i.id !== id);
       if (nextEdit) {
         location.href = '/item/' + nextEdit.id + '/edit';
@@ -399,30 +399,30 @@
           location.href = '/item/new';
         } else {
           clearJob();
-          log('åºåããååãããã¾ãã');
+          log('出品する商品がありません');
         }
       }
       return true;
     }
 
-    // --- /item/new: æ°è¦åºåãã©ã¼ã å¥å ---
+    // --- /item/new: 新規出品フォーム入力 ---
     if (path === '/item/new') {
       const currentItem = job.items.find(i => i.data && !i.relisted);
       if (!currentItem) { clearJob(); return false; }
 
       injectStyles();
       showProgressPanel(job);
-      log('åºåä¸­: ' + currentItem.data.title.substring(0, 20));
+      log('出品中: ' + currentItem.data.title.substring(0, 20));
 
       const success = await fillNewItemForm(currentItem.data);
       currentItem.relisted = success;
       saveJob(job);
 
       if (success && job.deleteOriginals) {
-        // åé¤ã¯ãã¼ã¸é·ç§»ããã®ã§ããã§çµããï¼/sellã«æ»ã£ã¦ããåé¤ãã§ã¼ãºï¼
+        // 削除はページ遷移するのでここで終わり（/sellに戻ってから削除フェーズ）
         job.phase = 'delete';
         saveJob(job);
-        // æ¬¡ã®æªåºåãããã°åã«åºåãã
+        // 次の未出品があれば先に出品する
         const next = job.items.find(i => i.data && !i.relisted);
         if (next) {
           location.href = '/item/new';
@@ -436,7 +436,7 @@
       return true;
     }
 
-    // --- /sell: åé¤ãã§ã¼ãº ---
+    // --- /sell: 削除フェーズ ---
     if ((path === '/sell' || path === '/sell/') && job.phase === 'delete') {
       injectStyles();
       showProgressPanel(job);
@@ -448,7 +448,7 @@
         return true;
       }
       clearJob();
-      log('â ãã¹ã¦å®äºãã¾ããï¼');
+      log('✅ すべて完了しました！');
       showCompleteMessage();
       return true;
     }
@@ -463,7 +463,7 @@
       location.href = '/item/new';
     } else {
       clearJob();
-      log('â å¨ååºåãå®äºãã¾ããï¼');
+      log('✅ 全再出品が完了しました！');
       showCompleteMessage();
     }
   }
@@ -511,7 +511,7 @@
       injectStyles();
       panel = document.createElement('div');
       panel.id = 'rr-panel';
-      panel.innerHTML = '<div id="rr-header"><span>ð ã©ã¯ãååºåãã¼ã«</span><button id="rr-close">â</button></div><div id="rr-body"><div id="rr-progress"><div id="rr-progress-text">å¦çä¸­...</div><div id="rr-progress-bar"><div id="rr-progress-fill" style="width:0%"></div></div></div><div id="rr-log"></div></div>';
+      panel.innerHTML = '<div id="rr-header"><span>🔄 ラクマ再出品ツール</span><button id="rr-close">✕</button></div><div id="rr-body"><div id="rr-progress"><div id="rr-progress-text">処理中...</div><div id="rr-progress-bar"><div id="rr-progress-fill" style="width:0%"></div></div></div><div id="rr-log"></div></div>';
       document.body.appendChild(panel);
       document.getElementById('rr-close').onclick = () => panel.remove();
     }
@@ -520,13 +520,13 @@
     const fill = document.getElementById('rr-progress-fill');
     const text = document.getElementById('rr-progress-text');
     if (fill) fill.style.width = Math.round(done / total * 100) + '%';
-    if (text) text.textContent = done + ' / ' + total + ' ä»¶å®äº';
+    if (text) text.textContent = done + ' / ' + total + ' 件完了';
   }
 
   function showCompleteMessage() {
     let panel = document.getElementById('rr-panel');
     if (!panel) { injectStyles(); panel = document.createElement('div'); panel.id = 'rr-panel'; document.body.appendChild(panel); }
-    panel.innerHTML = '<div id="rr-header"><span>ð ã©ã¯ãååºåãã¼ã«</span><button id="rr-close">â</button></div><div id="rr-body" style="text-align:center;padding:24px 16px"><div style="font-size:48px">â</div><div style="font-size:16px;font-weight:bold;margin-top:8px">ååºåãå®äºãã¾ããï¼</div><button onclick="document.getElementById(\'rr-panel\').remove()" style="margin-top:16px;padding:8px 24px;background:#BF0090;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:14px">éãã</button></div>';
+    panel.innerHTML = '<div id="rr-header"><span>🔄 ラクマ再出品ツール</span><button id="rr-close">✕</button></div><div id="rr-body" style="text-align:center;padding:24px 16px"><div style="font-size:48px">✅</div><div style="font-size:16px;font-weight:bold;margin-top:8px">再出品が完了しました！</div><button onclick="document.getElementById(\'rr-panel\').remove()" style="margin-top:16px;padding:8px 24px;background:#BF0090;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:14px">閉じる</button></div>';
     document.getElementById('rr-close').onclick = () => panel.remove();
   }
 
@@ -538,39 +538,39 @@
     panel.id = 'rr-panel';
     panel.innerHTML = `
       <div id="rr-header">
-        <span>ð ã©ã¯ãååºåãã¼ã«</span>
-        <button id="rr-close">â</button>
+        <span>🔄 ラクマ再出品ツール</span>
+        <button id="rr-close">✕</button>
       </div>
       <div id="rr-body">
         <div style="color:#666;font-size:12px;margin-bottom:8px">
-          ååºåããååãé¸ãã§ãã ãã
-          <span class="rr-select-all" id="rr-select-all">ï¼ãã¹ã¦é¸æï¼</span>
+          再出品する商品を選んでください
+          <span class="rr-select-all" id="rr-select-all">（すべて選択）</span>
         </div>
-        <div style="text-align:center;padding:16px;color:#999" id="rr-loading">èª­ã¿è¾¼ã¿ä¸­...</div>
+        <div style="text-align:center;padding:16px;color:#999" id="rr-loading">読み込み中...</div>
         <ul id="rr-item-list"></ul>
         <div id="rr-options">
-          <label><input type="checkbox" id="rr-delete-orig"> åã®åºåãåé¤ãã</label>
+          <label><input type="checkbox" id="rr-delete-orig"> 元の出品を削除する</label>
         </div>
-        <button id="rr-start-btn" disabled>ååãé¸ãã§ãã ãã</button>
+        <button id="rr-start-btn" disabled>商品を選んでください</button>
         <div id="rr-log"></div>
       </div>
     `;
     document.body.appendChild(panel);
     document.getElementById('rr-close').onclick = () => panel.remove();
 
-    log('åºåä¸­ã®ååãåå¾ä¸­...');
+    log('出品中の商品を取得中...');
     let items = [];
     try { items = await fetchSellItems(); }
-    catch (e) { log('åå¾ã¨ã©ã¼: ' + e.message); }
+    catch (e) { log('取得エラー: ' + e.message); }
 
     document.getElementById('rr-loading')?.remove();
     const list = document.getElementById('rr-item-list');
 
     if (items.length === 0) {
-      list.innerHTML = '<li style="color:#999;padding:8px">åºåä¸­ã®ååãè¦ã¤ããã¾ãã</li>';
+      list.innerHTML = '<li style="color:#999;padding:8px">出品中の商品が見つかりません</li>';
       return;
     }
-    log('ååãªã¹ãèª­ã¿è¾¼ã¿å®äº: ' + items.length + 'ä»¶');
+    log('商品リスト読み込み完了: ' + items.length + '件');
 
     for (const item of items) {
       const li = document.createElement('li');
@@ -582,7 +582,7 @@
     function updateBtn() {
       const n = list.querySelectorAll('input:checked').length;
       const btn = document.getElementById('rr-start-btn');
-      btn.textContent = n > 0 ? n + 'ä»¶ãååºåãã' : 'ååãé¸ãã§ãã ãã';
+      btn.textContent = n > 0 ? n + '件を再出品する' : '商品を選んでください';
       btn.disabled = n === 0;
     }
 
@@ -600,13 +600,13 @@
         items: selectedIds.map(id => ({ id, data: null, relisted: false, deleted: false }))
       };
       saveJob(job);
-      log('éå§: ' + selectedIds.length + 'ä»¶ â ç·¨éãã¼ã¸ã¸ç§»åä¸­...');
+      log('開始: ' + selectedIds.length + '件 → 編集ページへ移動中...');
       location.href = '/item/' + selectedIds[0] + '/edit';
     };
   }
 
   // ============================================================
-  // ã¨ã³ããªã¼ãã¤ã³ã
+  // エントリーポイント
   // ============================================================
 
   (async function main() {
@@ -614,7 +614,7 @@
     if (job) {
       const handled = await runJob();
       if (handled) return;
-      if (confirm('ååºåå¦çãä¸­æ­ããã¦ãã¾ãã\nã­ã£ã³ã»ã«ãã¦æåããããç´ãã¾ããï¼')) {
+      if (confirm('再出品処理が中断されています。\nキャンセルして最初からやり直しますか？')) {
         clearJob();
       }
     }
@@ -622,7 +622,7 @@
       await showMainUI();
       return;
     }
-    alert('ãã®ãã¼ã«ã¯ https://fril.jp/sell ã§èµ·åãã¦ãã ããã\n\nç¾å¨ã®ãã¼ã¸ã«ç§»åãã¾ãã');
+    alert('このツールは https://fril.jp/sell で起動してください。\n\n現在のページに移動します。');
     location.href = '/sell';
   })();
 
