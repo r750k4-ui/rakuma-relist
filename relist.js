@@ -144,7 +144,7 @@
       height: 8px; background: #f0f0f0; border-radius: 4px; overflow: hidden; margin-top: 4px;
     }
     #rr-progress-fill { height: 100%; background: #BF0000; transition: width 0.3s; }
-  2 #rr-log {
+    #rr-log {
       background: #f8f8f8; border-radius: 6px; padding: 8px;
       font-size: 12px; max-height: 120px; overflow-y: auto;
       margin-top: 8px; font-family: monospace;
@@ -169,7 +169,7 @@
     const items = [];
 
     // 方法1: /item/{id}/edit リンクからIDを取得（最も確実）
-    // 「編集」ボタンのhregにIDが含まれている
+    // 「編集」ボタンのhrefにIDが含まれている
     const editLinks = [...document.querySelectorAll('a[href*="/item/"][href*="/edit"]')];
     for (const a of editLinks) {
       const m = a.href.match(/\/item\/([a-zA-Z0-9_-]+)\/edit/);
@@ -177,9 +177,9 @@
       const id = m[1];
       if (items.find(i => i.id === id)) continue;
 
-      // 同じ商品カードe��の要素を探す（「編集」テキスト自体はタイトルでないはでいはでいは
+      // 同じ商品カードe��の要素を探す（「編集」テキスト自体はタイトルでないので使わない）
       const card = a.closest('li, article, [class*="item"], [class*="deal"], tr, div[class]');
-      // 画像の alt や、テキストノードかりタイトルを推測
+      // 画像の alt や、テキストノードからタイトルを推測
       const imgEl = card?.querySelector('img');
       const altText = imgEl?.alt?.trim();
       // imgのaltが「商品名」に近ければそれを使う
@@ -188,7 +188,7 @@
       if (altText && altText.length > 4 && !altText.includes('http')) {
         title = altText;
       } else if (card) {
-        // カード内の全テキストから「編集」「削除」「再出品」などのUI文字を除いたもは
+        // カード内の全テキストから「編集」「削除」「再出品」などのUI文字を除いたもの
         const allText = [...card.querySelectorAll('*')]
           .filter(el => el.children.length === 0) // テキストノードを持つ末端要素
           .map(el => el.textContent.trim())
@@ -478,26 +478,41 @@
     let doc = popup.document;
 
     try {
+    // クロスウィンドウの "Illegal invocation" 回避のため、
+    // ポップアップ自身のコンテキストにヘルパー関数を注入する
+    try {
+      popup.eval(
+        'if(!window._rrH){window._rrH=1;' +
+        'window._rrSI=function(s,v){var e=document.querySelector(s);if(!e)return;' +
+        'Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,"value").set.call(e,v);' +
+        'e.dispatchEvent(new Event("input",{bubbles:true}));};' +
+        'window._rrST=function(v){var e=document.querySelector("textarea");if(!e)return;' +
+        'Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,"value").set.call(e,v);' +
+        'e.dispatchEvent(new Event("input",{bubbles:true}));};' +
+        'window._rrSS=function(i,v){var e=document.querySelectorAll("select")[i];if(!e)return;' +
+        'Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,"value").set.call(e,v);' +
+        'e.dispatchEvent(new Event("change",{bubbles:true}));};}'
+      );
+    } catch(e} { log('ヘルパー注入エラー: ' + e.message); }
+
     log('タイトル入力中...');
-    setInput(titleInput, itemData.title);
+    popup._rrSI('[placeholder="40文字まで"],[placeholder*="商品名"],[maxlength="40"]', itemData.title);
     await sleep(400); // React の再レンダリングを待つ
     doc = popup.document; // 再レンダリング後に再取得
 
-    const priceInput = doc.querySelector('[placeholder*="300"], [placeholder*="円"]');
-    if (priceInput) setInput(priceInput, itemData.price);
+    popup._rrSI('[placeholder*="300"],[placeholder*="円"],[placeholder*="金額"]', itemData.price);
     await sleep(200);
 
-    const textarea = doc.querySelector('textarea');
-    if (textarea) setTextarea(textarea, itemData.description);
+    popup._rrST(itemData.description);
     await sleep(200);
 
     // セレクト類
     const selects = doc.querySelectorAll('select');
-    if (selects[0] && itemData.condition) setSelect(selects[0], itemData.condition);
-    if (selects[1] && itemData.shippingPayer) setSelect(selects[1], itemData.shippingPayer);
-    if (selects[2] && itemData.shippingDays) setSelect(selects[2], itemData.shippingDays);
-    if (selects[3] && itemData.shippingOrigin) setSelect(selects[3], itemData.shippingOrigin);
-    if (selects[4] && itemData.purchaseRequest) setSelect(selects[4], itemData.purchaseRequest);
+    if (selects[0] && itemData.condition) popup._rrSS(0, itemData.condition);
+    if (selects[1] && itemData.shippingPayer) popup._rrSS(1, itemData.shippingPayer);
+    if (selects[2] && itemData.shippingDays) popup._rrSS(2, itemData.shippingDays);
+    if (selects[3] && itemData.shippingOrigin) popup._rrSS(3, itemData.shippingOrigin);
+    if (selects[4] && itemData.purchaseRequest) popup._rrSS(4, itemData.purchaseRequest);
     await sleep(300);
 
     // 画像アップロード（失敗しても継続）
@@ -522,7 +537,7 @@
       }
     }
 
-    // カヅゴリ選択
+    // カテゴリ選択
     if (itemData.categoryPath) {
       await selectCategory(itemData.categoryPath, doc);
     }
@@ -603,9 +618,9 @@
     });
   }
 
-  // カヅゴリモーダル選択
+  // カテゴリモーダル選択
   async function selectCategory(categoryPath, doc) {
-    log('カヅゴリ選択: ' + categoryPath);
+    log('カテゴリ選択: ' + categoryPath);
     const labels = categoryPath.split(/>　|>/).map(s => s.trim()).filter(Boolean);
     if (labels.length === 0) return;
 
@@ -630,7 +645,7 @@
         if (btn) btn.click();
       }
     } catch (e) {
-      log('カヅゴリモーダルエラー: ' + e.message);
+      log('カテゴリモーダルエラー: ' + e.message);
     }
   }
 
@@ -676,7 +691,16 @@
       const modal = await waitForInDoc(doc, '.chakra-dialog__content', 5000);
       const searchInput = modal.querySelector('input[type="text"], input[type="search"]');
       if (searchInput) {
-        setInput(searchInput, brandName);
+        // クロスウィンドウ対応: docのdefaultViewでsetInputを実行
+        const modalWin = doc.defaultView || window;
+        try {
+          const setter = Object.getOwnPropertyDescriptor(modalWin.HTMLInputElement.prototype, 'value').set;
+          setter.call(searchInput, brandName);
+          searchInput.dispatchEvent(new modalWin.Event('input', { bubbles: true }));
+        } catch(e) {
+          searchInput.value = brandName;
+          searchInput.dispatchEvent(new Event('input', { bubbles: true }));
+        }
         await sleep(800);
         const result = [...modal.querySelectorAll('button, li')].find(el =>
           el.textContent.trim() === brandName
@@ -752,7 +776,7 @@
         await deleteItem(toDelete.id);
         toDelete.deleted = true;
         saveJob(job);
-        // deleteはページ遷移するので次回実行に委ねる
+        // deleteはページ遷移するので次回実行に委キる
         return true;
       }
 
@@ -930,7 +954,7 @@
       btn.disabled = true;
       btn.textContent = 'ポップアップを開いています...';
 
-      // ユーザー操作コンヅキスト内で全ポップアップを一括オープン
+      // ユーザー操作コンテキスト内で全ポップアップを一括オープン
       const popups = {};
       for (const id of selectedIds) {
         popups[id] = window.open(
