@@ -83,18 +83,25 @@
 
   async function fetchSellItems() {
     const items = [];
-    try {
-      for (let page = 1; page <= 10; page++) {
-        const res = await fetch('/api/sell_items?page=' + page + '&per_page=30', {
+
+    // まずAPIで試みる（複数エンドポイント）
+    const apiEndpoints = [
+      '/api/sell_items?page=1&per_page=100',
+      '/api/items?status=on_sale&page=1&per_page=100',
+      '/api/users/current/items?status=on_sale&page=1&per_page=100',
+    ];
+    for (const endpoint of apiEndpoints) {
+      try {
+        const res = await fetch(endpoint, {
           headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
           credentials: 'include'
         });
-        if (!res.ok) break;
+        if (!res.ok) continue;
         const ct = res.headers.get('content-type') || '';
-        if (!ct.includes('json')) break;
+        if (!ct.includes('json')) continue;
         const json = await res.json();
         const list = json.items || json.user_items || json.data || [];
-        if (list.length === 0) break;
+        if (list.length === 0) continue;
         for (const item of list) {
           const id = item.id || item.item_id;
           if (!id) continue;
@@ -104,11 +111,71 @@
             thumb: item.thumbnail_url || item.image_url || ''
           });
         }
-        if (!json.has_next && !json.next_page) break;
+        if (items.length > 0) return items;
+      } catch (e) {
+        console.log('[rakuma-relist] API取得エラー:', endpoint, e.message);
       }
-    } catch (e) {
-      console.log('[rakuma-relist] API取得エラー:', e.message);
     }
+
+    // APIが全て失敗した場合、DOMから直接スクレイプ
+    // （/sell ページの商品リンクからIDを取得）
+    log('APIが使えないためDOMから商品を取得します...');
+    const scraped = scrapeItemsFromDOM();
+    if (scraped.length > 0) return scraped;
+
+    // DOMにも商品がない場合、/sell ページを fetch してHTMLから抽出
+    try {
+      log('/sell ページをfetchして商品を䊽出中...');
+      const res = await fetch('/sell', { credentials: 'include' });
+      const html = await res.text();
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(html, 'text/html');
+      const extracted = scrapeItemsFromDoc(doc);
+      if (extracted.length > 0) return extracted;
+    } catch (e) {
+      console.log('[rakuma-relist] /sell fetch エラー:', e.message);
+    }
+
+    return items;
+  }
+
+  function scrapeItemsFromDOM() {
+    return scrapeItemsFromDoc(document);
+  }
+
+  function scrapeItemsFromDoc(doc) {
+    const items = [];
+    const seen = new Set();
+
+    // パターン1: /item/{id} 形式のリンク
+    const links = [...doc.querySelectorAll('a[href*="/item/"]')];
+    for (const a of links) {
+      const m = a.href.match(/\/item\/([a-zA-Z0-9_-]+)(?:\/|$|\?)/);
+      if (!m) continue;
+      const id = m[1];
+      if (id === 'new' || seen.has(id)) continue;
+      seen.add(id);
+      // タイトルは近くのテキストノードから取得
+      const titleEl = a.querySelector('p, span, div, h2, h3') || a;
+      const title = titleEl.textContent.trim().substring(0, 50) || ('商品 ' + id);
+      const imgEl = a.querySelector('img');
+      const thumb = imgEl ? (imgEl.src || imgEl.dataset.src || '') : '';
+      items.push({ id, title, thumb });
+    }
+
+    // パターン2: data-item-id 属性
+    const dataEls = [...doc.querySelectorAll('[data-item-id]')];
+    for (const el of dataEls) {
+      const id = el.dataset.itemId;
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      const titleEl = el.querySelector('p, span, div') || el;
+      const title = titleEl.textContent.trim().substring(0, 50) || ('商品 ' + id);
+      const imgEl = el.querySelector('img');
+      const thumb = imgEl ? (imgEl.src || '') : '';
+      items.push({ id, title, thumb });
+    }
+
     return items;
   }
 
@@ -210,15 +277,17 @@
       }
 
       // カテゴリ選択
+
       if (itemData.categoryPath) await selectCategory(itemData.categoryPath);
       await sleep(500);
 
       // 配送方法選択
+
       if (itemData.shippingMethod) await selectShippingMethod(itemData.shippingMethod);
       await sleep(500);
 
       // ブランド選択
-      if (itemData.brandName && itemData.brandName !== 'ブランドなし' && itemData.brandName !== 'ブランド') {
+      if (itemData.brandName && itemData.brandName !== 'ブラントなし' && itemData.brandName !== 'ブラント') {
         await selectBrand(itemData.brandName);
       }
       await sleep(500);
@@ -228,402 +297,304 @@
       if (!confirmBtn) { log('⚠ 確認ボタンが見つかりません'); return false; }
       confirmBtn.scrollIntoView();
       await sleep(300);
-      confirmBtn.click();
+      cۙ�\�P����X��
+N���8�#9a�d�x�fx���#x��8�����हo�x�i;�"9� 9i)�My���"B���	�论*�x����8�:`m����o�x�hK����N�ۜ��X�Z]��H]�Z]�]���Z\�J�\���HO�]�H�ۜ�H�][�\��[
 
-      // 「出品する」ボタンを待つ（最大15秒）
-      log('確認ページ遷移待ち...');
-      const submitBtn = await new Promise(resolve => {
-        let n = 0;
-        const t = setInterval(() => {
-          n++;
-          const btn = [...document.querySelectorAll('button')].find(b =>
-            b.textContent.trim() === '出品する' ||
-            b.textContent.trim() === '新規出品する' ||
-            b.textContent.trim() === '出品を新規登録する'
-          );
-          if (btn) { clearInterval(t); resolve(btn); }
-          if (n > 30) { clearInterval(t); resolve(null); }
-        }, 500);
-      });
 
-      if (submitBtn) {
-        submitBtn.scrollIntoView();
-        await sleep(300);
-        submitBtn.click();
-        log('✅ 出品完了！');
-        await sleep(3000);
-        return true;
-      } else {
-        log('⚠ 出品ボタンが見つかりません');
-        return false;
-      }
-    } catch (e) {
-      log('❌ フォーム入力エラー: ' + e.message);
-      return false;
-    }
-  }
+HO�����ۜ���Hˋ����[Y[��]Y\�T�[X�ܐ[
+	؝]ۉ�WK��[�
+�O����^�۝[���[J
+HOOH	�a�d�x�fx������^�۝[���[J
+HOOH	���:)��a�d�x�fx������^�۝[���[J
+HOOH	�a�d�xह��:)���n�c,��fx��
+NY�
+��H��X\�[�\��[
+
+N��\���J��N�B�Y�
+���
+H��X\�[�\��[
+
+N��\���J�[
+N�B�K
+L
+NJN�Y�
+�X�Z]��H�X�Z]����ܛ�[�՚Y]�
+N]�Z]�Y\
+�
+N�X�Z]����X��
+N��	��!H9a�d�yk�9.��� I�N]�Z]�Y\
+�
+N�]\���YNH[�H��	���9a�d�x��8������c:)���i8�b�ࢸ�o��f����N�]\���[�NB�H�]�
+JH��	��c8��x�x��8��9aiyb���8��x���	�
+�K�Y\��Y�JN�]\���[�NB�B����OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOB���8����8��8���`n9�����8�����x�����OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOB��\�[���[��[ۈ�[X��]Y�ܞJ�]Y�ܞT]
+H��	������8��`n9����	�
+��]Y�ܞT]
+N�ۜ�X�[�H�]Y�ܞT]��]
+ψ��K�X\
+�O�˝�[J
+JK��[\����X[�NY�
+[X�[˛[��
+H�]\���ۜ��]��Hˋ����[Y[��]Y\�T�[X�ܐ[
+	؝]ۉ�WK��[�
+�O����^�۝[��[��Y\�	ω�H�����\�
+	���\�ʏH��]Y�ܞH�I�B�
+NY�
+X�]��H�]\���]����X��
+N]�Z]�Y\
+
+N�H�ۜ�[�[H]�Z]�Z]�܊	˘�ZܘKYX[�����۝[�	�
+L
+N�܈
+�ۜ�X�[وX�[�H]�Z]�Y\
 
-  // ============================================================
-  // モーダル選択ヘルパー
-  // ============================================================
+
+N�ۜ���Hˋ��[�[�]Y\�T�[X�ܐ[
+	؝]ۉ�WK��[�
+�O��ۜ�^Hˋ�����[��\�K��[\��O�����U\HOOH�K�X\
+�O���^�۝[���[J
+JK���[�	��N�]\��^OOHX�[��^�۝[���[J
+HOOHX�[JNY�
+��H����X��
+NB�H�]�
+JH���	������8������8��8����8��x���	�
+�K�Y\��Y�JN�B�B��\�[���[��[ۈ�[X��\[��Y]�
+Y]��[YJH��	�acz` y��y��z`n9����	�
+�Y]��[YJN�ۜ��\��Hˋ����[Y[��]Y\�T�[X�ܐ[
+	؝]ۉ�WK��[�
+�O�������\�
+	���\�ʏH��\[��[Y]��K��\�ʏH��\[��Y]��I�H���^�۝[��[��Y\�	�acz` y��y��xऺ`n9����B�
+NY�
+\�\��H�]\���\����X��
+N]�Z]�Y\
+
+N�H�ۜ�[�[H]�Z]�Z]�܊	˘�ZܘKYX[�����۝[�	�
+L
+N�ۜ�\��]Hˋ��[�[�]Y\�T�[X�ܐ[
+	؝]ۋ�[�X�[	�WK��[�
+[O��ۜ�^Hˋ��[��[��\�K��[\��O�����U\HOOH�K�X\
+�O���^�۝[���[J
+JK���[�	��N�]\��^OOHY]��[YH[�^�۝[���[J
+HOOHY]��[YNJNY�
+\��]
+H\��]��X��
+N�ۜ�\�[�H\��]����\�
+	؝]ۉ�H\��]�\�[�[[Y[�Y�
+\�[�	��\�[�OOH\��]
+H\�[���X��
+NB�H�]�
+JH���	�acz` y��y��x����8��8����8��x���	�
+�K�Y\��Y�JN�B�B��\�[���[��[ۈ�[X���[�
+��[��[YJH��	�����x�����z`n9����	�
+���[��[YJN�ۜ���[���Hˋ����[Y[��]Y\�T�[X�ܐ[
+	؝]ۉ�WK��[�
+�O������\�
+	���\�ʏH���[��I�JNY�
+X��[���H�]\����[�����X��
+N]�Z]�Y\
+
+N�H�ۜ�[�[H]�Z]�Z]�܊	˘�ZܘKYX[�����۝[�	�
+L
+N�ۜ��X\��[�]H[�[�]Y\�T�[X�܊	�[�]�\OH�^�K[�]�\OH��X\���I�NY�
+�X\��[�]
+H�][�]
+�X\��[�]��[��[YJN]�Z]�Y\
+
+N�ۜ��\�[Hˋ��[�[�]Y\�T�[X�ܐ[
+	؝]ۋI�WK��[�
+[O�[�^�۝[���[J
+HOOH��[��[YJNY�
+�\�[
+H�\�[��X��
+NB�H�]�
+JH���	�����x�����x����8��8����8��x���	�
+�K�Y\��Y�JN�B�B����OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOB���9bb�fi9a��!����OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOB��\�[���[��[ۈ[]R][JY
+H��	�a�d�ybb�fi9.+N�	�
+�Y��X���[��
+H
+�	ˋ���N�ۜ��ܙ�H��[Y[��]Y\�T�[X�܊	�Y]Vۘ[YOH��ܙ�]��[��I�O˙�]]�X�]J	��۝[�	�NY�
+X�ܙ�H���	��ԑ���8��8�����c�o��i,y�e��N��]\���[�N�B��ۜ��ܛHH��[Y[��ܙX]Q[[Y[�
+	ٛܛI�N�ܛK�Y]�H	���	��ܛK�X�[ۈH	��][K��
+�Y�ܛK��[K�\�^HH	ۛۙI��ۜ�HH��[Y[��ܙX]Q[[Y[�
+	�[�]	�N�K�\HH	�Y[���K��[YHH	��Y]�	��K��[YHH	�[]I��ۜ�H��[Y[��ܙX]Q[[Y[�
+	�[�]	�N��\HH	�Y[�����[YHH	�]][�X�]W���[�����[YHH�ܙ��ܛK�\[��[
+JN��ܛK�\[��[
+
+N��[Y[����K�\[��[
+�ܛJN�ܛK��X�Z]
 
-  async function selectCategory(categoryPath) {
-    log('カテゴリ選択: ' + categoryPath);
-    const labels = categoryPath.split(/> |>/).map(s => s.trim()).filter(Boolean);
-    if (!labels.length) return;
-    const catBtn = [...document.querySelectorAll('button')].find(b =>
-      b.textContent.includes('>') || b.closest('[class*="category"]')
-    );
-    if (!catBtn) return;
-    catBtn.click();
-    await sleep(800);
-    try {
-      const modal = await waitFor('.chakra-dialog__content', 5000);
-      for (const label of labels) {
-        await sleep(400);
-        const btn = [...modal.querySelectorAll('button')].find(b => {
-          const text = [...b.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent.trim()).join('');
-          return text === label || b.textContent.trim() === label;
-        });
-        if (btn) btn.click();
-      }
-    } catch (e) { log('カテゴリモーダルエラー: ' + e.message); }
-  }
+N�]\���YNB����OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOB���8��x�8����8�������{�"8����8�8स�o��g��a8�i�⭹�b��y�!��"B���OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOB��\�[���[��[ۈ�[��؊
+H�ۜ��؈H�]�؊
+NY�
+Z�؊H�]\���[�N�ۜ�]H��][ۋ�]�[YN���KKH�][K��YK�Y]�9��:f�����8�8�i������8����ya�KKB��ۜ�Y]X]�H]�X]�
+ח�][W�׋�J�W�Y]	�NY�
+Y]X]�
+H�ۜ�YHY]X]��WN�ۜ��ؒ][HH�؋�][\˙�[�
+HO�K�YOOHY
+NY�
+Z�ؒ][JH�]\���[�N�[��X��[\�
+N�����ܙ\��[�[
+�؊N��	������8��c�o��.+N�	�
+�Y��X���[��
+H
+�	ˋ���N����XX�8�k���8�����8������8हo�x�i��H]�Z]�Z]�܊	��X�Z�\�H�9���ke��o��iȗK�X^[��H��I�ML
+NH�]�
+JH���	���8��x�x��8��:*�x�o�/�8�o����8��8ਸ੸��	�N�B�]�Z]�Y\
 
-  async function selectShippingMethod(methodName) {
-    log('配送方法選択: ' + methodName);
-    const shipBtn = [...document.querySelectorAll('button')].find(b =>
-      b.closest('[class*="shipping-method"], [class*="shippingMethod"]') ||
-      b.textContent.includes('配送方法を選択')
-    );
-    if (!shipBtn) return;
-    shipBtn.click();
-    await sleep(800);
-    try {
-      const modal = await waitFor('.chakra-dialog__content', 5000);
-      const target = [...modal.querySelectorAll('button, span, label')].find(el => {
-        const text = [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent.trim()).join('');
-        return text === methodName || el.textContent.trim() === methodName;
-      });
-      if (target) {
-        target.click();
-        const parent = target.closest('button') || target.parentElement;
-        if (parent && parent !== target) parent.click();
-      }
-    } catch (e) { log('配送方法モーダルエラー: ' + e.message); }
-  }
+L
+N��ۜ�]HH^�X��\��[�][Q]JY
+NY�
+]K�]JH��	��$�9c�o�Έ	�
+�]K�]K��X���[���
+JN�ؒ][K�]HH]N�]�R�؊�؊NH[�H��	���8�����8��c�o��i,y�e��"8���8��8����j��e��"x� x�x�x�������e��o��fI�N�ؒ][K�]HH�[�ؒ][K��[\�YH�[�N�]�R�؊�؊NB����9�(x�k�ਸ����������ۜ��^Y]H�؋�][\˙�[�
+HO�K�]HOOH�[	��K�YOOHY
+NY�
+�^Y]
+H��][ۋ��Y�H	��][K��
+��^Y]�Y
+�	��Y]	�H[�H�ۜ��\��[�[��H�؋�][\˙�[�
+HO�K�]H	��ZK��[\�Y
+NY�
+�\��[�[��H��][ۋ��Y�H	��][Kۙ]��H[�H�X\��؊
+N��	�a�d�x�fx��ea�d�x�c8�`�ࢸ�o��f����NB�B��]\���YNB����KKH�][Kۙ]Έ9��:)��a�d�x��x�x��8��9aiyb��KKB�Y�
+]OOH	��][Kۙ]��H�ۜ��\��[�][HH�؋�][\˙�[�
+HO�K�]H	��ZK��[\�Y
+NY�
+X�\��[�][JH��X\��؊
+N��]\���[�N�B��[��X��[\�
+N�����ܙ\��[�[
+�؊N��	�a�d�y.+N�	�
+��\��[�][K�]K�]K��X���[���
+JN��ۜ��X��\��H]�Z]�[�]�][Q�ܛJ�\��[�][K�]JN�\��[�][K��[\�YH�X��\���]�R�؊�؊N�Y�
+�X��\��	���؋�[]SܚY�[�[�H��9bb�fi8�k�����8�:`m�����fx���k��i��d��d��i��`���ࢻ�"��[8�j��.��h��i��b��ybb�fi8��x����8஻�"B��؋�\�HH	�[]I��]�R�؊�؊N��9�(x�k��*�a�d�x�c8�`��8�l9ab8�j�a�d�x�fx��ۜ��^H�؋�][\˙�[�
+HO�K�]H	��ZK��[\�Y
+NY�
+�^
+H��][ۋ��Y�H	��][Kۙ]��H[�H��][ۋ��Y�H	���[	�B��]\���YNB��Y�[��R�؊�؊N�]\���YNB����KKH��[�9bb�fi8��x����8ஈKKB�Y�
 
-  async function selectBrand(brandName) {
-    log('ブランド選択: ' + brandName);
-    const brandBtn = [...document.querySelectorAll('button')].find(b => b.closest('[class*="brand"]'));
-    if (!brandBtn) return;
-    brandBtn.click();
-    await sleep(800);
-    try {
-      const modal = await waitFor('.chakra-dialog__content', 5000);
-      const searchInput = modal.querySelector('input[type="text"], input[type="search"]');
-      if (searchInput) {
-        setInput(searchInput, brandName);
-        await sleep(800);
-        const result = [...modal.querySelectorAll('button, li')].find(el => el.textContent.trim() === brandName);
-        if (result) result.click();
-      }
-    } catch (e) { log('ブランドモーダルエラー: ' + e.message); }
-  }
+]OOH	���[	�]OOH	���[��H	���؋�\�HOOH	�[]I�H[��X��[\�
+N�����ܙ\��[�[
+�؊N�ۜ��[]HH�؋�][\˙�[�
+HO�K��[\�Y	��ZK�[]Y
+NY�
+�[]JH]�Z][]R][J�[]K�Y
+N�[]K�[]YH�YN�]�R�؊�؊N�]\���YNB��X\��؊
+N��	��!H8�fx�nx�i�k�9.���e��o��e��g�� I�N�����\]SY\��Y�J
+N�]\���YNB���]\���[�NB���[��[ۈY�[��R�؊�؊H�ۜ��^H�؋�][\˙�[�
+HO�K�]H	��ZK��[\�Y
+NY�
+�^
+H�]�R�؊�؊N��][ۋ��Y�H	��][Kۙ]��H[�H�X\��؊
+N��	��!H9aj9a�ya�d�x�c9k�9.���e��o��e��g�� I�N�����\]SY\��Y�J
+NB�B����OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOB���RB���OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOB���[��[ۈ[��X��[\�
+HY�
+��[Y[���][[Y[��RY
+	ܜ�\�[\��JH�]\���ۜ��H��[Y[��ܙX]Q[[Y[�
+	��[I�N˚YH	ܜ�\�[\��˝^�۝[�H�ܜ�\[�[���][ێ��^Y����ܚY�����Y�̌ؘX��ܛ�[��ٙ��؛ܙ\�\�Y]\ΌL�؛�\�Y�Ό���ؘJ��NދZ[�^�NNNNNٛ۝Y�[Z[N��[��\�\�Y��ݙ\���ΚY[�B�ܜ�ZXY\��\�^N��^ڝ\�Y�KX�۝[���X�KX�]�Y[��[YۋZ][\Θ�[�\��Y[�ΌL�M�ؘX��ܛ�[��Б�L���܎�ٙ��ٛ۝]�ZY����B�ܜ�X���^ؘX��ܛ�[���ۙN؛ܙ\���ۙN���܎�ٙ��ٛ۝\�^�N�N��\��܎��[�\�B�ܜ�X��^�Y[�ΌM��X^ZZY��L�ݙ\����^N�]]�B�ܜ�Z][K[\��\�\�[N��ۙN�X\��[���Y[�ΌB�ܜ�Z][K[\�^�\�^N��^�[YۋZ][\Θ�[�\���\��Y[�΍�؛ܙ\�X���N�\��Y�YY_B�ܜ�Z][K[\�[Y���Y��ZY���ؚ�X�Y�]��ݙ\�؛ܙ\�\�Y]\΍B�ܜ�[�[ۜ��X\��[�]��L��Y[��]��L�؛ܙ\�]��\��Y�YY_B�ܜ�\�\�X����Y�L	N�X\��[�]��L��Y[�ΌLؘX��ܛ�[��Б�L���܎�ٙ��؛ܙ\���ۙN؛ܙ\�\�Y]\Ύٛ۝\�^�N�M��\��܎��[�\�ٛ۝]�ZY����B�ܜ�\�\�X���\�X�YؘX��ܛ�[��������\��܎���X[��YB�ܜ�[���X^ZZY��ML�ݙ\����^N�]]�ٛ۝\�^�N�L\���܎�͍���X\��[�]��B�ܜ�[���X\��[���B����\�[X�X[��\��܎��[�\����܎�Б�L�^YX�ܘ][ێ�[�\�[�_B�ܜ�\��ܙ\��X�\�ؘX��ܛ�[���YYN؛ܙ\�\�Y]\΍�ZY���X\��[�]��B�ܜ�\��ܙ\��Y�[ؘX��ܛ�[��Б�L�ZY��L	N؛ܙ\�\�Y]\΍��[��][ێ��Y���B���[Y[��XY�\[��[
+�NB���[��[ۈ��\��H�ۜ�[H��[Y[���][[Y[��RY
+	ܜ�[���NY�
+Y[
+H��ۜ��K���	�Ԕ�H	�
+�\��N��]\���B��ۜ�H��[Y[��ܙX]Q[[Y[�
+	�	�N�^�۝[�H\��[�\[��[
+
+N[��ܛ��H[��ܛ�ZY�B���[��[ۈ�����ܙ\��[�[
+�؊H][�[H��[Y[���][[Y[��RY
+	ܜ�\[�[	�NY�
+\[�[
+H[��X��[\�
+N[�[H��[Y[��ܙX]Q[[Y[�
+	�]��N[�[�YH	ܜ�\[�[	�[�[�[��\�SH	�]�YH���ZXY\����[��'�!8��x����a�ya�d�x��8��8�����[���]ۈYH���X���H���%O؝]ۏ��]��]�YH���X��H��]�YH���\��ܙ\�ȏ�]�YH���\��ܙ\��]^��a��!�.+K����]��]�YH���\��ܙ\��X�\���]�YH���\��ܙ\��Y�[��[OH��Y�	H���]���]���]��]�YH���[�ȏ��]���]�����[Y[����K�\[��[
+[�[
+N��[Y[���][[Y[��RY
+	ܜ�X���I�K�ۘ�X��H
 
-  // ============================================================
-  // 削除処理
-  // ============================================================
+HO�[�[��[[ݙJ
+NB��ۜ�ۙHH�؋�][\˙�[\�HO�K��[\�Y
+K�[���ۜ��[H�؋�][\˛[���ۜ��[H��[Y[���][[Y[��RY
+	ܜ�\��ܙ\��Y�[	�N�ۜ�^H��[Y[���][[Y[��RY
+	ܜ�\��ܙ\��]^	�NY�
+�[
+H�[��[K��YHX]���[�
+ۙH��[
+�L
+H
+�	�I�Y�
+^
+H^�^�۝[�HۙH
+�	��	�
+��[
+�	�9.��k�9.���B���[��[ۈ�����\]SY\��Y�J
+H][�[H��[Y[���][[Y[��RY
+	ܜ�\[�[	�NY�
+\[�[
+H�[��X��[\�
+N�[�[H��[Y[��ܙX]Q[[Y[�
+	�]��N�[�[�YH	ܜ�\[�[	����[Y[����K�\[��[
+[�[
+N�B�[�[�[��\�SH	�]�YH���ZXY\����[��'�!8��x����a�ya�d�x��8��8�����[���]ۈYH���X���H���%O؝]ۏ��]��]�YH���X��H��[OH�^X[Yێ��[�\��Y[�Ό�M���]��[OH��۝\�^�N����!O�]��]��[OH��۝\�^�N�M�ٛ۝]�ZY�����X\��[�]����a�ya�d�x�c9k�9.���e��o��e��g�� O�]���]ۈۘ�X��H���[Y[���][[Y[��RY
+	ܜ�\[�[	�K��[[ݙJ
+H��[OH�X\��[�]��M��Y[�Ύ�ؘX��ܛ�[��Б�L���܎�ٙ��؛ܙ\���ۙN؛ܙ\�\�Y]\Ύ��\��܎��[�\�ٛ۝\�^�N�M��e�x�f8��؝]ۏ��]�����[Y[���][[Y[��RY
+	ܜ�X���I�K�ۘ�X��H
 
-  async function deleteItem(id) {
-    log('出品削除中: ' + id.substring(0, 8) + '...');
-    const csrf = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
-    if (!csrf) { log('CSRFトークン取得失敗'); return false; }
-    const form = document.createElement('form');
-    form.method = 'POST';
-    form.action = '/item/' + id;
-    form.style.display = 'none';
-    const m = document.createElement('input'); m.type = 'hidden'; m.name = '_method'; m.value = 'delete';
-    const t = document.createElement('input'); t.type = 'hidden'; t.name = 'authenticity_token'; t.value = csrf;
-    form.appendChild(m); form.appendChild(t);
-    document.body.appendChild(form);
-    form.submit();
-    return true;
-  }
+HO�[�[��[[ݙJ
+NB��\�[���[��[ۈ���XZ[�RJ
+H[��X��[\�
+N��[Y[���][[Y[��RY
+	ܜ�\[�[	�O˜�[[ݙJ
+N��ۜ�[�[H��[Y[��ܙX]Q[[Y[�
+	�]��N[�[�YH	ܜ�\[�[	�[�[�[��\�SH�]�YH���ZXY\�����[��'�!8��x����a�ya�d�x��8��8�����[����]ۈYH���X���H���%O؝]ۏ���]���]�YH���X��H���]��[OH���܎�͍��ٛ۝\�^�N�L��X\��[�X���N����9a�ya�d�x�fx��ea�d�xऺ`n8���i��c��h8�ex�a��[��\��H���\�[X�X[�YH���\�[X�X[���"8�fx�nx�i�`n9����"O��[����]���]��[OH�^X[Yێ��[�\��Y[�ΌM����܎��NNH�YH���[�Y[�ȏ�*�x�o�/�8�o�.+K����]���[YH���Z][K[\����[��]�YH���[�[ۜȏ��X�[�[�]\OH��X�؛��YH���Y[]K[ܚYȏ�9a`��k�a�d�xहbb�fi8�fx���X�[���]����]ۈYH���\�\�X���\�X�Y�ea�d�xऺ`n8���i��c��h8�ex�a؝]ۏ��]�YH���[�ȏ��]����]�����[Y[����K�\[��[
+[�[
+N��[Y[���][[Y[��RY
+	ܜ�X���I�K�ۘ�X��H
 
-  // ============================================================
-  // メインジョブフロー（ページをまたいで状態管理）
-  // ============================================================
+HO�[�[��[[ݙJ
+N���	�a�d�y.+x�k�ea�d�xहc�o��.+K����N]][\�H�N�H�][\�H]�Z]�]��[][\�
+N�B��]�
+JH���	�c�o���8��x���	�
+�K�Y\��Y�JN�B����[Y[���][[Y[��RY
+	ܜ�[�Y[���O˜�[[ݙJ
+N�ۜ�\�H��[Y[���][[Y[��RY
+	ܜ�Z][K[\�	�N�Y�
+][\˛[��OOH
+H\��[��\�SH	�H�[OH���܎��NNN�Y[�Ύ��a�d�y.+x�k�ea�d�x�c:)���i8�b�ࢸ�o��f����O���]\��B���	�ea�d�x���x��:*�x�o�/�8�o�k�9.���	�
+�][\˛[��
+�	�.��N��܈
+�ۜ�][Hو][\�H�ۜ�HH��[Y[��ܙX]Q[[Y[�
+	�I�NK�[��\�SH[�]\OH��X�؛��YH���X؋I�][K�YH��[YOH��][K�YH���][K�[X��[Y�ܘ�H��][K�[X�H�[H����	��OX�[�܏H���X؋I�][K�YH���][K�]_O�X�[�\��\[��[
+JNB��\��Y]�[�\�[�\�	��[��I�\]P��N�[��[ۈ\]P��
+H�ۜ��H\��]Y\�T�[X�ܐ[
+	�[�]��X��Y	�K�[���ۜ���H��[Y[���][[Y[��RY
+	ܜ�\�\�X���N���^�۝[�H����
+�	�.��हa�ya�d�x�fx����	�ea�d�xऺ`n8���i��c��h8�ex�a	����\�X�YH�OOHB����[Y[���][[Y[��RY
+	ܜ�\�[X�X[	�K�ۘ�X��H
 
-  async function runJob() {
-    const job = getJob();
-    if (!job) return false;
-    const path = location.pathname;
+HO�\��]Y\�T�[X�ܐ[
+	�[�]�\OH��X�؛��I�K��ܑXX�
+؈O�؋��X��YH�YJN\]P��
+NN���[Y[���][[Y[��RY
+	ܜ�\�\�X���K�ۘ�X��H
 
-    // --- /item/{id}/edit: 編集ページでデータ抽出 ---
-    const editMatch = path.match(/^\/item\/([^/]+)\/edit$/);
-    if (editMatch) {
-      const id = editMatch[1];
-      const jobItem = job.items.find(i => i.id === id);
-      if (!jobItem) return false;
-
-      injectStyles();
-      showProgressPanel(job);
-      log('データ取得中: ' + id.substring(0, 8) + '...');
-
-      // Reactのレンダリングを待つ
-      try {
-        await waitFor('[placeholder="40文字まで"], [maxlength="40"]', 15000);
-      } catch (e) { log('⚠ フォーム読み込みタイムアウト'); }
-      await sleep(500);
-
-      const data = extractCurrentItemData(id);
-      if (data.title) {
-        log('✓ 取得: ' + data.title.substring(0, 20));
-        jobItem.data = data;
-        saveJob(job);
-      } else {
-        log('⚠ データ取得失敗（タイトルなし）、スキップします');
-        jobItem.data = null;
-        jobItem.relisted = false;
-        saveJob(job);
-      }
-
-      // 次のアクション
-      const nextEdit = job.items.find(i => i.data === null && i.id !== id);
-      if (nextEdit) {
-        location.href = '/item/' + nextEdit.id + '/edit';
-      } else {
-        const firstPending = job.items.find(i => i.data && !i.relisted);
-        if (firstPending) {
-          location.href = '/item/new';
-        } else {
-          clearJob();
-          log('出品する商品がありません');
-        }
-      }
-      return true;
-    }
-
-    // --- /item/new: 新規出品フォーム入力 ---
-    if (path === '/item/new') {
-      const currentItem = job.items.find(i => i.data && !i.relisted);
-      if (!currentItem) { clearJob(); return false; }
-
-      injectStyles();
-      showProgressPanel(job);
-      log('出品中: ' + currentItem.data.title.substring(0, 20));
-
-      const success = await fillNewItemForm(currentItem.data);
-      currentItem.relisted = success;
-      saveJob(job);
-
-      if (success && job.deleteOriginals) {
-        // 削除はページ遷移するのでここで終わり（/sellに戻ってから削除フェーズ）
-        job.phase = 'delete';
-        saveJob(job);
-        // 次の未出品があれば先に出品する
-        const next = job.items.find(i => i.data && !i.relisted);
-        if (next) {
-          location.href = '/item/new';
-        } else {
-          location.href = '/sell';
-        }
-        return true;
-      }
-
-      advanceJob(job);
-      return true;
-    }
-
-    // --- /sell: 削除フェーズ ---
-    if ((path === '/sell' || path === '/sell/') && job.phase === 'delete') {
-      injectStyles();
-      showProgressPanel(job);
-      const toDelete = job.items.find(i => i.relisted && !i.deleted);
-      if (toDelete) {
-        await deleteItem(toDelete.id);
-        toDelete.deleted = true;
-        saveJob(job);
-        return true;
-      }
-      clearJob();
-      log('✅ すべて完了しました！');
-      showCompleteMessage();
-      return true;
-    }
-
-    return false;
-  }
-
-  function advanceJob(job) {
-    const next = job.items.find(i => i.data && !i.relisted);
-    if (next) {
-      saveJob(job);
-      location.href = '/item/new';
-    } else {
-      clearJob();
-      log('✅ 全再出品が完了しました！');
-      showCompleteMessage();
-    }
-  }
-
-  // ============================================================
-  // UI
-  // ============================================================
-
-  function injectStyles() {
-    if (document.getElementById('rr-styles')) return;
-    const s = document.createElement('style');
-    s.id = 'rr-styles';
-    s.textContent = `
-      #rr-panel{position:fixed;top:20px;right:20px;width:320px;background:#fff;border-radius:12px;box-shadow:0 2px 24px rgba(0,0,0,.2);z-index:99999;font-family:sans-serif;overflow:hidden}
-      #rr-header{display:flex;justify-content:space-between;align-items:center;padding:12px 16px;background:#BF0090;color:#fff;font-weight:bold}
-      #rr-close{background:none;border:none;color:#fff;font-size:18px;cursor:pointer}
-      #rr-body{padding:16px;max-height:500px;overflow-y:auto}
-      #rr-item-list{list-style:none;margin:0;padding:0}
-      #rr-item-list li{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #eee}
-      #rr-item-list img{width:40px;height:40px;object-fit:cover;border-radius:4px}
-      #rr-options{margin-top:12px;padding-top:12px;border-top:1px solid #eee}
-      #rr-start-btn{width:100%;margin-top:12px;padding:10px;background:#BF0090;color:#fff;border:none;border-radius:8px;font-size:14px;cursor:pointer;font-weight:bold}
-      #rr-start-btn:disabled{background:#ccc;cursor:not-allowed}
-      #rr-log{max-height:150px;overflow-y:auto;font-size:11px;color:#666;margin-top:8px}
-      #rr-log p{margin:2px 0}
-      .rr-select-all{cursor:pointer;color:#BF0090;text-decoration:underline}
-      #rr-progress-bar{background:#eee;border-radius:4px;height:8px;margin-top:4px}
-      #rr-progress-fill{background:#BF0090;height:100%;border-radius:4px;transition:width .3s}
-    `;
-    document.head.appendChild(s);
-  }
-
-  function log(msg) {
-    const el = document.getElementById('rr-log');
-    if (!el) { console.log('[RR] ' + msg); return; }
-    const p = document.createElement('p');
-    p.textContent = msg;
-    el.appendChild(p);
-    el.scrollTop = el.scrollHeight;
-  }
-
-  function showProgressPanel(job) {
-    let panel = document.getElementById('rr-panel');
-    if (!panel) {
-      injectStyles();
-      panel = document.createElement('div');
-      panel.id = 'rr-panel';
-      panel.innerHTML = '<div id="rr-header"><span>🔄 ラクマ再出品ツール</span><button id="rr-close">✕</button></div><div id="rr-body"><div id="rr-progress"><div id="rr-progress-text">処理中...</div><div id="rr-progress-bar"><div id="rr-progress-fill" style="width:0%"></div></div></div><div id="rr-log"></div></div>';
-      document.body.appendChild(panel);
-      document.getElementById('rr-close').onclick = () => panel.remove();
-    }
-    const done = job.items.filter(i => i.relisted).length;
-    const total = job.items.length;
-    const fill = document.getElementById('rr-progress-fill');
-    const text = document.getElementById('rr-progress-text');
-    if (fill) fill.style.width = Math.round(done / total * 100) + '%';
-    if (text) text.textContent = done + ' / ' + total + ' 件完了';
-  }
-
-  function showCompleteMessage() {
-    let panel = document.getElementById('rr-panel');
-    if (!panel) { injectStyles(); panel = document.createElement('div'); panel.id = 'rr-panel'; document.body.appendChild(panel); }
-    panel.innerHTML = '<div id="rr-header"><span>🔄 ラクマ再出品ツール</span><button id="rr-close">✕</button></div><div id="rr-body" style="text-align:center;padding:24px 16px"><div style="font-size:48px">✅</div><div style="font-size:16px;font-weight:bold;margin-top:8px">再出品が完了しました！</div><button onclick="document.getElementById(\'rr-panel\').remove()" style="margin-top:16px;padding:8px 24px;background:#BF0090;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:14px">閉じる</button></div>';
-    document.getElementById('rr-close').onclick = () => panel.remove();
-  }
-
-  async function showMainUI() {
-    injectStyles();
-    document.getElementById('rr-panel')?.remove();
-
-    const panel = document.createElement('div');
-    panel.id = 'rr-panel';
-    panel.innerHTML = `
-      <div id="rr-header">
-        <span>🔄 ラクマ再出品ツール</span>
-        <button id="rr-close">✕</button>
-      </div>
-      <div id="rr-body">
-        <div style="color:#666;font-size:12px;margin-bottom:8px">
-          再出品する商品を選んでください
-          <span class="rr-select-all" id="rr-select-all">（すべて選択）</span>
-        </div>
-        <div style="text-align:center;padding:16px;color:#999" id="rr-loading">読み込み中...</div>
-        <ul id="rr-item-list"></ul>
-        <div id="rr-options">
-          <label><input type="checkbox" id="rr-delete-orig"> 元の出品を削除する</label>
-        </div>
-        <button id="rr-start-btn" disabled>商品を選んでください</button>
-        <div id="rr-log"></div>
-      </div>
-    `;
-    document.body.appendChild(panel);
-    document.getElementById('rr-close').onclick = () => panel.remove();
-
-    log('出品中の商品を取得中...');
-    let items = [];
-    try { items = await fetchSellItems(); }
-    catch (e) { log('取得エラー: ' + e.message); }
-
-    document.getElementById('rr-loading')?.remove();
-    const list = document.getElementById('rr-item-list');
-
-    if (items.length === 0) {
-      list.innerHTML = '<li style="color:#999;padding:8px">出品中の商品が見つかりません</li>';
-      return;
-    }
-    log('商品リスト読み込み完了: ' + items.length + '件');
-
-    for (const item of items) {
-      const li = document.createElement('li');
-      li.innerHTML = `<input type="checkbox" id="rr-cb-${item.id}" value="${item.id}">${item.thumb ? `<img src="${item.thumb}" alt="">` : ''}<label for="rr-cb-${item.id}">${item.title}</label>`;
-      list.appendChild(li);
-    }
-
-    list.addEventListener('change', updateBtn);
-    function updateBtn() {
-      const n = list.querySelectorAll('input:checked').length;
-      const btn = document.getElementById('rr-start-btn');
-      btn.textContent = n > 0 ? n + '件を再出品する' : '商品を選んでください';
-      btn.disabled = n === 0;
-    }
-
-    document.getElementById('rr-select-all').onclick = () => {
-      list.querySelectorAll('input[type="checkbox"]').forEach(cb => cb.checked = true);
-      updateBtn();
-    };
-
-    document.getElementById('rr-start-btn').onclick = () => {
-      const selectedIds = [...list.querySelectorAll('input:checked')].map(cb => cb.value);
-      const deleteOriginals = document.getElementById('rr-delete-orig').checked;
-      const job = {
-        phase: 'relist',
-        deleteOriginals,
-        items: selectedIds.map(id => ({ id, data: null, relisted: false, deleted: false }))
-      };
-      saveJob(job);
-      log('開始: ' + selectedIds.length + '件 → 編集ページへ移動中...');
-      location.href = '/item/' + selectedIds[0] + '/edit';
-    };
-  }
-
-  // ============================================================
-  // エントリーポイント
-  // ============================================================
-
-  (async function main() {
-    const job = getJob();
-    if (job) {
-      const handled = await runJob();
-      if (handled) return;
-      if (confirm('再出品処理が中断されています。\nキャンセルして最初からやり直しますか？')) {
-        clearJob();
-      }
-    }
-    if (location.pathname === '/sell' || location.pathname === '/sell/') {
-      await showMainUI();
-      return;
-    }
-    alert('このツールは https://fril.jp/sell で起動してください。\n\n現在のページに移動します。');
-    location.href = '/sell';
-  })();
-
-})();
+HO��ۜ��[X�YY�Hˋ��\��]Y\�T�[X�ܐ[
+	�[�]��X��Y	�WK�X\
+؈O�؋��[YJN�ۜ�[]SܚY�[�[�H��[Y[���][[Y[��RY
+	ܜ�Y[]K[ܚY��K��X��Y�ۜ��؈H\�N�	ܙ[\�	��[]SܚY�[�[��][\Έ�[X�YY˛X\
+YO�
+�Y]N��[�[\�Y��[�K[]Y��[�HJJB�N�]�R�؊�؊N��	�e��i�Έ	�
+��[X�YY˛[��
+�	�.�8���9��:f�����8�8�n9���b�y.+K����N��][ۋ��Y�H	��][K��
+��[X�YY��H
+�	��Y]	�NB����OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOB���8�8�����8����8��x�8��������OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOB��
+\�[���[��[ۈXZ[�
+H�ۜ��؈H�]�؊
+NY�
+�؊H�ۜ�[�YH]�Z]�[��؊
+NY�
+[�Y
+H�]\��Y�
+�ۙ�\�J	�a�ya�d�ya��!��c9.+y��x�ex�8�i��a8�o��fx� ���x������������e��i�� 9b'x�b��x�a8ࢹ��8�e��o��fx�b��'��JH�X\��؊
+NB�B�Y�
+��][ۋ�]�[YHOOH	���[	���][ۋ�]�[YHOOH	���[��H]�Z]���XZ[�RJ
+N�]\��B�[\�
+	��d��k���8��8����k�΋�ٜ�[����[8�i�-m�b�x�e��i��c��h8�ex�a8� �����g*8�k�����8�8�j����b�x�e��o��fx� ��N��][ۋ��Y�H	���[	�JJ
+N�JJ
+N�
